@@ -5,17 +5,18 @@ from decimal import Decimal
 import re
 
 
-DAILY = ("餐饮", "咖啡", "校园消费", "日用", "交通", "洗衣")
-SPENDING = DAILY + ("美团", "医疗", "数码", "会员订阅", "休闲", "人情", "其他消费")
+DAILY = ("餐饮", "校园消费", "日用", "交通")
+SPENDING = DAILY + ("美团", "医疗", "会员订阅", "休闲", "人情", "其他消费")
+LEGACY_CATEGORIES = {"咖啡": "餐饮", "数码": "休闲", "洗衣": "日用"}
 EXCLUSIONS = ("借出", "代付待回款", "投资理财", "内部划转", "其他非消费")
 CHOICES = ("未知",) + SPENDING + EXCLUSIONS
 
 # 平台大类有时只是商户注册时填的，商品说明往往更具体。
 KEYWORDS = (
     ("医疗", ("门诊", "挂号", "药房", "医院")),
-    ("数码", ("surface", "耳机", "触控笔", "键盘")),
+    ("休闲", ("surface", "耳机", "触控笔", "键盘")),
     ("会员订阅", ("大会员", "订阅", "连续包月")),
-    ("洗衣", ("洗衣机", "洗衣房")),
+    ("日用", ("洗衣机", "洗衣房")),
     ("校园消费", ("武汉大学-消费", "武汉大学离线方案-消费")),
     ("休闲", ("海伦司", "电影票")),
     ("餐饮", ("餐饮", "食堂", "烘焙", "鲜包", "包子", "烧肉", "卤味", "火锅", "小厨",
@@ -59,10 +60,10 @@ def refunded_cents(status):
 def guess_category(tx):
     detail = (tx["product"] + " " + tx["merchant"]).lower()
     if "咖啡" in detail:
-        return "咖啡"
+        return "餐饮"
     if tx["merchant"] == "美团" and tx["product"].startswith("团购-美团"):
         # 无商品名的团购单独展示；用户确认这类 4.61 元的团购是咖啡。
-        return "咖啡" if tx["cents"] == 461 else "美团"
+        return "餐饮" if tx["cents"] == 461 else "美团"
     for category, clues in KEYWORDS:
         if any(clue in detail for clue in clues):
             return category
@@ -96,7 +97,9 @@ def after_refund(tx):
 def evaluate(tx, cap, receipts=()):
     """AA 回款归到原付款日。个人实付先扣平台退款，再扣已关联的朋友回款。"""
     state = payment_state(tx)
-    category = tx["manual_category"] or tx["merchant_category"] or guess_category(tx)
+    manual = LEGACY_CATEGORIES.get(tx["manual_category"], tx["manual_category"])
+    merchant = LEGACY_CATEGORIES.get(tx["merchant_category"], tx["merchant_category"])
+    category = manual or merchant or guess_category(tx)
     received = sum(receipt["cents"] for receipt in receipts)
     net = tx["cents"]
     if state == "支出":
@@ -111,7 +114,8 @@ def evaluate(tx, cap, receipts=()):
         bucket = "待分类"
     else:
         bucket = "已计入"
-    return dict(tx, category=category, bucket=bucket, net=net, editable=state == "支出",
+    return dict(tx, manual_category=manual, merchant_category=merchant, category=category,
+                bucket=bucket, net=net, editable=state == "支出",
                 daily=bucket == "已计入" and category in DAILY, group_receipt=is_group_receipt(tx),
                 receipts=receipts, received=received, fund=investment_product(tx))
 

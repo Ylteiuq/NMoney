@@ -188,10 +188,29 @@ class LedgerTest(unittest.TestCase):
         data = self.fetch("/api/ledger")
         self.assertEqual(data["funds"], [["甲基金", {"count":2, "cents":20000}]])
         self.assertEqual(data["months"][0][1]["invested"],data["invested"])
-        self.assertEqual(dict(data["categories"]), {"咖啡":461,"美团":485,"餐饮":461})
+        self.assertEqual(dict(data["categories"]), {"美团":485,"餐饮":922})
         self.assertEqual(data["groups"]["日常生活"]["cents"],922)
         self.assertEqual(data["groups"]["已计入"]["cents"],1407)
         self.assertEqual(data["known_spending"],1407)
+
+    def test_merged_categories_on_existing_and_new_trades(self):
+        def pay(order, merchant, product):
+            return Transaction("微信", order, "2026-11-15 10:00:00", merchant, product,
+                               "商户消费", "支出", 1000, "支付成功")
+        ids = self.add_trades(pay("a", "甲店", "商品"), pay("b", "乙店", "商品"),
+                              pay("c", "丙店", "耳机"), pay("d", "公寓", "洗衣机"))
+        with database(self.path) as conn:
+            conn.execute("UPDATE trades SET manual_category='咖啡', note='原备注' WHERE id=?", (ids["a"],))
+            conn.execute("INSERT INTO merchant_rules VALUES ('微信','乙店','洗衣')")
+        state = self.fetch("/api/ledger")
+        rows = {r["order_id"]: r for r in state["rows"]}
+        self.assertEqual((rows["a"]["manual_category"], rows["a"]["note"]), ("餐饮", "原备注"))
+        self.assertEqual(rows["b"]["merchant_category"], "日用")
+        self.assertTrue({"咖啡", "数码", "洗衣"}.isdisjoint(state["choices"]))
+        self.assertEqual(dict(state["categories"]), {"餐饮": 1000, "日用": 2000, "休闲": 1000})
+        self.assertEqual(state["groups"]["日常生活"]["cents"], 3000)
+        self.mark(rows["a"], "数码")
+        self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 2000)
 
     def test_known_spending_excludes_unknown_over_cap_and_loans(self):
         self.upload("支付宝.csv", alipay([("meal", "餐饮美食", "135.00", "交易成功"),

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from .rules import CHOICES, SPENDING, after_refund, evaluate, is_group_receipt, payment_state, summarize
+from .rules import CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt, payment_state, summarize
 from .statements import Transaction
 
 
@@ -92,6 +92,8 @@ def annotate(conn, trade_id, category, note="", rule="keep", include_over_cap=No
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     if row is None or payment_state(row) != "支出":
         raise ValueError("只有付款记录可以补用途。")
+    if isinstance(category, str):
+        category = LEGACY_CATEGORIES.get(category, category)
     if category not in CHOICES:
         raise ValueError("请选择列表中的用途。")
     conn.execute("UPDATE trades SET manual_category=?, note=? WHERE id=?", (category, note.strip(), trade_id))

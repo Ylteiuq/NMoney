@@ -28,6 +28,25 @@ function post(url, payload) {
     body: JSON.stringify(payload) });
 }
 
+// 正在运行的旧版服务仍会返回细分类。刷新页面即可使用相同的分类口径。
+function mergeLegacyCategories(data) {
+  const aliases = new Map([["咖啡", "餐饮"], ["洗衣", "日用"], ["数码", "休闲"]]);
+  if (!data.choices.some(name => aliases.has(name))) return;
+  const category = name => aliases.get(name) || name;
+  data.choices = [...new Set(data.choices.map(category))];
+  for (const row of data.rows) {
+    row.category = category(row.category);
+    row.manual_category = category(row.manual_category);
+    row.merchant_category = category(row.merchant_category);
+  }
+  const totals = new Map();
+  for (const [name, cents] of data.categories) {
+    const merged = category(name);
+    totals.set(merged, (totals.get(merged) || 0) + cents);
+  }
+  data.categories = [...totals].sort((a, b) => b[1] - a[1]);
+}
+
 function navigate(page) {
   state.page = page;
   for (const tab of document.querySelectorAll("nav button")) {
@@ -75,6 +94,7 @@ async function refresh() {
   if (!Number.isInteger(data.known_spending)) {
     throw new Error("账本服务需要重启。请在运行账本的终端按 Ctrl+C，再双击「启动账本.command」。");
   }
+  mergeLegacyCategories(data);
   state.ledger = data;
   const selected = $("period").value;
   const options = [new Option("本月", "current"), new Option("全部日期", ""), new Option("自选日期", "custom")];
