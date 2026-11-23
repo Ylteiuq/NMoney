@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.py[cod]
+*.xlsx
+*.csv
+.venv/
+.DS_Store
+november-ledger.html
+/NMoney.git/

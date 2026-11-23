@@ -1,0 +1,156 @@
+"""消费类别与统计口径。金额一律用分，显示时才转换为元。"""
+
+from collections import defaultdict
+from decimal import Decimal
+import re
+
+
+DAILY = ("餐饮", "咖啡", "校园消费", "日用", "交通", "洗衣")
+SPENDING = DAILY + ("美团", "医疗", "数码", "会员订阅", "休闲", "人情", "其他消费")
+EXCLUSIONS = ("借出", "代付待回款", "投资理财", "内部划转", "其他非消费")
+CHOICES = ("未知",) + SPENDING + EXCLUSIONS
+
+# 平台大类有时只是商户注册时填的，商品说明往往更具体。
+KEYWORDS = (
+    ("医疗", ("门诊", "挂号", "药房", "医院")),
+    ("数码", ("surface", "耳机", "触控笔", "键盘")),
+    ("会员订阅", ("大会员", "订阅", "连续包月")),
+    ("洗衣", ("洗衣机", "洗衣房")),
+    ("校园消费", ("武汉大学-消费", "武汉大学离线方案-消费")),
+    ("休闲", ("海伦司", "电影票")),
+    ("餐饮", ("餐饮", "食堂", "烘焙", "鲜包", "包子", "烧肉", "卤味", "火锅", "小厨",
+            "酸奶", "古茗", "奈雪", "煲珠公", "肉夹馍", "咖啡", "点餐")),
+    ("日用", ("超市", "便利店", "综合商店")),
+    ("人情", ("生日", "礼金")),
+)
+PLATFORM_CATEGORIES = {"餐饮美食": "餐饮", "日用百货": "日用", "交通出行": "交通", "医疗健康": "医疗"}
+
+
+def payment_state(tx):
+    """先判定资金性质；退款入账与原支付的退款状态不能扣两次。"""
+    kind, status = tx["source_category"], tx["status"]
+    if tx["direction"] == "收入" and "退款" in kind + status:
+        return "退款入账"
+    if kind == "投资理财":
+        return "投资理财"
+    if "提现" in kind or tx["direction"] in {"/", "不计收支"}:
+        return "内部划转" if "提现" in kind else "不计收支"
+    if tx["direction"] == "收入":
+        return "收入"
+    if tx["direction"] != "支出":
+        return "不计收支"
+    if "全额退款" in status or status in {"已退款", "退款成功"}:
+        return "已退款"
+    if "部分退款" in status or "已退款" in status:
+        if refunded_cents(status) is None:
+            return "退款待核对"
+    elif "退款" in status:
+        return "退款待核对"
+    if any(word in status for word in ("交易关闭", "已关闭", "已撤销", "支付失败", "待付款", "等待付款", "未支付")):
+        return "未成交"
+    return "支出"
+
+
+def refunded_cents(status):
+    match = re.search(r"(?:部分退款|已退款)[\s(（¥￥:：]*(\d+(?:\.\d{1,2})?)", status)
+    return int(Decimal(match.group(1)) * 100) if match else None
+
+
+def guess_category(tx):
+    detail = (tx["product"] + " " + tx["merchant"]).lower()
+    if "咖啡" in detail:
+        return "咖啡"
+    if tx["merchant"] == "美团" and tx["product"].startswith("团购-美团"):
+        # 无商品名的团购单独展示；用户确认这类 4.61 元的团购是咖啡。
+        return "咖啡" if tx["cents"] == 461 else "美团"
+    for category, clues in KEYWORDS:
+        if any(clue in detail for clue in clues):
+            return category
+    return PLATFORM_CATEGORIES.get(tx["source_category"], "美团" if tx["merchant"] == "美团" else "未知")
+
+
+def is_group_receipt(tx):
+    return (tx["source_category"] == "群收款" and payment_state(tx) == "收入"
+            and not any(word in tx["status"] for word in ("待收", "失败", "退还", "关闭")))
+
+
+def investment_product(tx):
+    """只累计有买入动作的付款；赎回、分红与失败记录不增加投入。"""
+    if tx["source_category"] != "投资理财" or tx["direction"] == "收入":
+        return None
+    if any(word in tx["status"] for word in ("失败", "关闭", "撤销", "退款", "待付款", "等待付款", "待支付", "未支付")):
+        return None
+    product = tx["product"].removeprefix("蚂蚁财富-")
+    if any(word in product for word in ("赎回", "卖出", "分红", "转出", "退款")):
+        return None
+    for action in ("买入", "申购", "定投", "认购"):
+        if action in product:
+            return product.removesuffix("-" + action)
+    return None
+
+
+def after_refund(tx):
+    return max(0, tx["cents"] - (refunded_cents(tx["status"]) or 0))
+
+
+def evaluate(tx, cap, receipts=()):
+    """AA 回款归到原付款日。个人实付先扣平台退款，再扣已关联的朋友回款。"""
+    state = payment_state(tx)
+    category = tx["manual_category"] or tx["merchant_category"] or guess_category(tx)
+    received = sum(receipt["cents"] for receipt in receipts)
+    net = tx["cents"]
+    if state == "支出":
+        net = max(0, after_refund(tx) - received)
+    if state != "支出":
+        bucket, category = "非消费", state
+    elif category in EXCLUSIONS:
+        bucket = "非消费"
+    elif net > cap and not tx["include_over_cap"]:
+        bucket = "超上限"
+    elif category == "未知":
+        bucket = "待分类"
+    else:
+        bucket = "已计入"
+    return dict(tx, category=category, bucket=bucket, net=net, editable=state == "支出",
+                daily=bucket == "已计入" and category in DAILY, group_receipt=is_group_receipt(tx),
+                receipts=receipts, received=received, fund=investment_product(tx))
+
+
+def summarize(rows):
+    groups = {key: {"count": 0, "cents": 0} for key in ("已计入", "日常生活", "待分类", "超上限")}
+    categories = defaultdict(int)
+    funds = defaultdict(lambda: {"count": 0, "cents": 0})
+    months = defaultdict(lambda: {"cents": 0, "count": 0, "pending": 0, "invested": 0})
+    known_over_cap = 0
+    deducted_receipts = 0
+    for row in rows:
+        month = months[row["time"][:7]]
+        if row["fund"]:
+            fund = funds[row["fund"]]
+            fund["count"] += 1
+            fund["cents"] += row["cents"]
+            month["invested"] += row["cents"]
+        bucket = row["bucket"]
+        if bucket == "超上限" and row["category"] in SPENDING:
+            known_over_cap += row["net"]
+        if bucket in ("已计入", "超上限") and row["category"] in SPENDING:
+            # 重导后的退款可能变多，分摊按原单实际能抵扣的部分展示。
+            deducted_receipts += min(after_refund(row), row["received"])
+        if bucket in groups:
+            groups[bucket]["count"] += 1
+            groups[bucket]["cents"] += row["net"]
+        if bucket == "待分类":
+            month["pending"] += 1
+        if bucket == "已计入":
+            categories[row["category"]] += row["net"]
+            month["count"] += 1
+            month["cents"] += row["net"]
+            if row["daily"]:
+                groups["日常生活"]["count"] += 1
+                groups["日常生活"]["cents"] += row["net"]
+    return {"groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
+            "known_spending": groups["已计入"]["cents"] + known_over_cap,
+            "categories": sorted(categories.items(), key=lambda pair: -pair[1]),
+            "funds": sorted(funds.items(), key=lambda pair: -pair[1]["cents"]),
+            "invested": sum(item["cents"] for item in funds.values()),
+            "months": sorted(months.items(), reverse=True)}
