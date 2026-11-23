@@ -118,3 +118,11 @@ summary { cursor: pointer; }
 #merchant-summary { margin: 14px 0; padding: 12px 16px; }
 #merchant-summary[open] summary { margin-bottom: 8px; }
 #merchant-summary .row-action { text-align: left; white-space: normal; }
+.daily-select { padding: 4px; font-size: 13px; }
+td .row-action + .daily-select { display: block; margin-top: 4px; }
+#all-outflows { color: var(--accent); text-underline-offset: 3px; }
+#cluster-list { display: grid; gap: 10px; margin-top: 16px; }
+.cluster { padding: 12px 16px; }
+.cluster summary span { display: inline-block; margin-left: 12px; color: var(--muted); font-size: 13px; }
+.cluster-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+@media (max-width: 500px) { nav { flex-wrap: wrap; } .cluster summary span { display: block; margin-left: 16px; } }

@@ -11,6 +11,73 @@ const state = { ledger: null, page: "overview", editId: null, listPage: 1, reque
   receiptId: null, category: "", merchant: null };
 const pageSize = 40;
 
+// 字符二元组适合没有空格的中文商品名，订单流水号不参与相似度。
+function clusterOutflows(rows) {
+  const documents = [];
+  const frequency = new Map();
+  const terms = value => {
+    const words = String(value || "").normalize("NFKC").toLowerCase().replace(/\d{4,}/g, " ")
+      .match(/[\p{L}\d]+/gu) || [];
+    const grams = new Set();
+    for (const w of words) {
+      if (w.length === 1) grams.add(w);
+      for (let i = 1; i < w.length; i++) grams.add(w.slice(i - 1, i + 1));
+    }
+    return [...grams];
+  };
+  for (const row of rows.filter(r => r.outflow).sort((a, b) => a.id - b.id)) {
+    const text = new Map();
+    for (const [prefix, value, weight] of [["商", row.merchant, 1], ["品", row.product, 1.25]]) {
+      const grams = terms(value);
+      for (const g of grams) text.set(prefix + g, weight / Math.sqrt(grams.length));
+    }
+    for (const key of text.keys()) frequency.set(key, (frequency.get(key) || 0) + 1);
+    documents.push({row, text});
+  }
+  const clusters = [];
+  const index = new Map();
+  for (const {row, text} of documents) {
+    const vector = new Map();
+    for (const [key, tf] of text) {
+      const idf = 1 + Math.log((1 + documents.length) / (1 + frequency.get(key)));
+      vector.set(key, tf * idf);
+    }
+    // 对数金额让相近价位平滑过渡。只有共享商户或商品文本的交易才互为候选。
+    const price = Math.log2(1 + row.cents / 100);
+    const band = Math.floor(price);
+    vector.set("价" + band, 1 - (price - band));
+    vector.set("价" + (band + 1), price - band);
+    const norm = Math.hypot(...vector.values());
+    for (const [key, value] of vector) vector.set(key, value / norm);
+    const candidates = new Set();
+    for (const key of text.keys()) for (const c of index.get(key) || []) candidates.add(c);
+    let best = null;
+    let bestScore = 0.68;
+    let bestDot = 0;
+    for (const c of candidates) {
+      let dot = 0;
+      for (const [key, value] of vector) dot += value * (c.sum.get(key) || 0);
+      const cosine = dot / Math.sqrt(c.squaredNorm);
+      if (cosine < bestScore) continue;
+      best = c;
+      bestScore = cosine;
+      bestDot = dot;
+    }
+    if (!best) {
+      best = {rows: [], sum: new Map(), squaredNorm: 0};
+      clusters.push(best);
+    }
+    best.rows.push(row);
+    best.squaredNorm += 1 + 2 * bestDot;
+    for (const [key, value] of vector) best.sum.set(key, (best.sum.get(key) || 0) + value);
+    for (const key of text.keys()) {
+      if (!index.has(key)) index.set(key, new Set());
+      index.get(key).add(best);
+    }
+  }
+  return clusters.map(c => c.rows).sort((a, b) => b.length - a.length || a[0].id - b[0].id);
+}
+
 function notice(message, error = false) {
   $("notice").textContent = message;
   $("notice").hidden = !message;
@@ -110,11 +177,13 @@ function applyRoute() {
     $("title").textContent = state.category + "明细";
   } else {
     const detail = hash === "details" || params.get("page") === "details" || params.has("bucket") || params.has("q");
-    navigate(detail ? "details" : hash === "imports" ? "imports" : "overview");
+    const page = hash === "clusters" || params.get("page") === "clusters" ? "clusters" : "overview";
+    navigate(detail ? "details" : hash === "imports" ? "imports" : page);
   }
   const changedRange = rangeIds.some((id, i) => $(id).value !== previousRange[i]);
   if (!state.ledger || changedRange) return refresh();
   renderDetails();
+  if (state.page === "clusters") renderClusters();
 }
 
 function periodQuery() {
@@ -159,6 +228,33 @@ async function refresh() {
   $("cap").value = data.cap / 100;
   renderOverview(data);
   renderDetails();
+  if (state.page === "clusters") renderClusters();
+}
+
+function renderClusters() {
+  const groups = clusterOutflows(state.ledger.rows);
+  state.clusters = groups.filter(rows => rows.length > 1);
+  const singles = groups.length - state.clusters.length;
+  $("cluster-count").textContent = state.clusters.length + " 组相似支出 · " + singles + " 笔单列";
+  const list = $("cluster-list");
+  const opened = new Set([...list.querySelectorAll("details.cluster[open]")].map(el => el.dataset.first));
+  const renderGroup = (rows, idx) => {
+    const names = [...new Set(rows.map(merchantLabel))];
+    const pending = rows.filter(r => !r.daily_choice).length;
+    const title = idx === -1 ? "未找到相似项" : names.slice(0, 2).join("、") + (names.length > 2 ? "等" : "");
+    const total = rows.reduce((sum, r) => sum + r.cents, 0);
+    const items = sortedRows(rows, "recent").map(r => tradeRow(r, true)).join("");
+    return `<details class="panel cluster" data-first="${rows[0].id}" ${opened.has(String(rows[0].id)) ? "open" : ""}>
+      <summary><strong>${escapeHTML(title)}</strong><span>${rows.length} 笔 · 原付 ${money(total)} · ${pending} 笔待确认</span></summary>
+      ${idx >= 0 && pending ? `<div class="cluster-actions"><button class="quiet" data-group="${idx}" data-choice="yes">将待确认的 ${pending} 笔计入日常</button>
+      <button class="quiet" data-group="${idx}" data-choice="no">将这 ${pending} 笔标为非日常</button></div>` : ""}
+      <div class="table-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th>
+      <th>用途统计</th><th class="money">原付金额</th><th>操作 / 日常归属</th></tr></thead><tbody>${items}</tbody></table></div>
+    </details>`;
+  };
+  const singleRows = groups.filter(rows => rows.length === 1).flat();
+  list.innerHTML = state.clusters.map(renderGroup).join("") + (singles ? renderGroup(singleRows, -1) : "");
+  if (!groups.length) list.textContent = "当前范围没有支出流水。";
 }
 
 function renderOverview(data) {
@@ -434,102 +530,123 @@ function on(id, event, action) {
   });
 }
 
-for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => { location.hash = tab.dataset.page; };
-window.addEventListener("hashchange", () => {
-  Promise.resolve().then(applyRoute).catch(error => notice(error.message, true));
-  $("title").focus();
-  window.scrollTo(0, 0);
-});
-for (const id of ["period", "start", "end", "platform"]) {
-  on(id, "change", () => {
-    notice("");
-    state.listPage = 1;
-    saveDetailFilters();
-    return refresh();
+function bindLedger() {
+  for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => {
+    location.hash = tab.dataset.page === "clusters" ? rangedHref(new URLSearchParams({page: "clusters"})) : tab.dataset.page;
+  };
+  window.addEventListener("hashchange", () => {
+    Promise.resolve().then(applyRoute).catch(error => notice(error.message, true));
+    $("title").focus();
+    window.scrollTo(0, 0);
   });
-}
-on("cap-form", "submit", async () => {
-  await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
-  await refresh();
-  notice("已保存上限，合计已重新计算。");
-});
-on("open-included", "click", () => toggleDrill("included"));
-on("open-daily", "click", () => toggleDrill("daily"));
-on("fold-drill", "click", () => toggleDrill(state.drill));
-on("drill-sort", "change", () => renderDrill());
-on("drill-category", "change", () => renderDrill());
-on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
-for (const [id, bucket] of [["open-pending", "待分类"], ["open-over", "超上限"], ["open-review", "日常待确认"]]) {
-  on(id, "click", () => { location.hash = rangedHref(new URLSearchParams({bucket})); });
-}
-for (const [id, event] of [["bucket", "change"], ["search", "input"]]) {
-  on(id, event, () => {
-    state.listPage = 1;
-    saveDetailFilters();
-    renderDetails();
-  });
-}
-on("merchant-list", "click", event => {
-  const button = event.target.closest("[data-merchant]");
-  if (!button) return;
-  state.merchant = button.dataset.merchant;
-  state.listPage = 1;
-  $("merchant-summary").open = false;
-  renderDetails();
-  $("clear-merchant").focus();
-});
-on("clear-merchant", "click", () => {
-  state.merchant = null;
-  state.listPage = 1;
-  renderDetails();
-  $("merchant-summary").querySelector("summary").focus();
-});
-on("previous", "click", () => { state.listPage--; renderDetails(); });
-on("next", "click", () => { state.listPage++; renderDetails(); });
-for (const id of ["trades", "drill-trades", "aa-list"]) on(id, "click", rowAction);
-document.addEventListener("change", async event => {
-  const select = event.target.closest("[data-daily]");
-  if (!select) return;
-  const id = Number(select.dataset.daily);
-  const previous = state.ledger.rows.find(row => row.id === id)?.daily_choice;
-  select.disabled = true;
-  try {
-    await post("/api/daily", {ids: [id], choice: select.value || null});
-  } catch (error) {
-    select.disabled = false;
-    select.value = previous || "";
-    notice(error.message, true);
-    return;
+  for (const id of ["period", "start", "end", "platform"]) {
+    on(id, "change", () => {
+      notice("");
+      state.listPage = 1;
+      saveDetailFilters();
+      if (state.page === "clusters") history.replaceState(null, "", rangedHref(new URLSearchParams({page: "clusters"})));
+      return refresh();
+    });
   }
-  try {
+  on("cap-form", "submit", async () => {
+    await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
     await refresh();
-    notice("已保存这笔支出的日常归属。");
-  } catch (error) { notice(error.message, true); }
-});
-on("aa-close", "click", () => $("aa-editor").close());
-on("aa-form", "submit", async () => {
-  try {
-    await post("/api/aa", {receipt_id: state.receiptId, expense_id: Number($("aa-target").value) || null});
-  } catch (error) {
-    $("aa-error").textContent = error.message;
-    return;
+    notice("已保存上限，合计已重新计算。");
+  });
+  on("open-included", "click", () => toggleDrill("included"));
+  on("open-daily", "click", () => toggleDrill("daily"));
+  on("fold-drill", "click", () => toggleDrill(state.drill));
+  on("drill-sort", "change", () => renderDrill());
+  on("drill-category", "change", () => renderDrill());
+  on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
+  for (const [id, bucket] of [["open-pending", "待分类"], ["open-over", "超上限"], ["open-review", "日常待确认"]]) {
+    on(id, "click", () => { location.hash = rangedHref(new URLSearchParams({bucket})); });
   }
-  $("aa-editor").close();
-  await refresh();
-  notice("已更新群收款关联和个人实付。");
-});
-on("close", "click", () => $("editor").close());
-on("edit-form", "submit", async () => {
-  try {
-    await post("/api/annotate", { id: state.editId, category: $("category").value,
-      note: $("note").value, rule: $("rule").value, include_over_cap: $("exception").checked });
-  } catch (error) {
-    $("edit-error").textContent = error.message;
-    return;
+  for (const [id, event] of [["bucket", "change"], ["search", "input"]]) {
+    on(id, event, () => {
+      state.listPage = 1;
+      saveDetailFilters();
+      renderDetails();
+    });
   }
-  $("editor").close();
-  await refresh();
-  notice("用途已保存。");
-});
-on("import-form", "submit", importFiles);
-Promise.resolve().then(applyRoute).catch((error) => notice(error.message, true));
+  on("merchant-list", "click", event => {
+    const button = event.target.closest("[data-merchant]");
+    if (!button) return;
+    state.merchant = button.dataset.merchant;
+    state.listPage = 1;
+    $("merchant-summary").open = false;
+    renderDetails();
+    $("clear-merchant").focus();
+  });
+  on("clear-merchant", "click", () => {
+    state.merchant = null;
+    state.listPage = 1;
+    renderDetails();
+    $("merchant-summary").querySelector("summary").focus();
+  });
+  on("previous", "click", () => { state.listPage--; renderDetails(); });
+  on("next", "click", () => { state.listPage++; renderDetails(); });
+  for (const id of ["trades", "drill-trades", "aa-list", "cluster-list"]) on(id, "click", rowAction);
+  on("cluster-list", "click", async event => {
+    const button = event.target.closest("[data-group]");
+    if (!button) return;
+    const rows = state.clusters[Number(button.dataset.group)];
+    const ids = rows.filter(r => !r.daily_choice).map(r => r.id);
+    const buttons = button.parentElement.querySelectorAll("button");
+    buttons.forEach(b => b.disabled = true);
+    try {
+      const result = await post("/api/daily", {ids, choice: button.dataset.choice, pending_only: true});
+      await refresh();
+      notice("已更新 " + result.changed + " 笔支出的日常归属。");
+    } finally { buttons.forEach(b => b.disabled = false); }
+  });
+  document.addEventListener("change", async event => {
+    const select = event.target.closest("[data-daily]");
+    if (!select) return;
+    const id = Number(select.dataset.daily);
+    const previous = state.ledger.rows.find(row => row.id === id)?.daily_choice;
+    select.disabled = true;
+    try {
+      await post("/api/daily", {ids: [id], choice: select.value || null});
+    } catch (error) {
+      select.disabled = false;
+      select.value = previous || "";
+      notice(error.message, true);
+      return;
+    }
+    try {
+      await refresh();
+      notice("已保存这笔支出的日常归属。");
+    } catch (error) { notice(error.message, true); }
+  });
+  on("aa-close", "click", () => $("aa-editor").close());
+  on("aa-form", "submit", async () => {
+    try {
+      await post("/api/aa", {receipt_id: state.receiptId, expense_id: Number($("aa-target").value) || null});
+    } catch (error) {
+      $("aa-error").textContent = error.message;
+      return;
+    }
+    $("aa-editor").close();
+    await refresh();
+    notice("已更新群收款关联和个人实付。");
+  });
+  on("close", "click", () => $("editor").close());
+  on("edit-form", "submit", async () => {
+    try {
+      await post("/api/annotate", { id: state.editId, category: $("category").value,
+        note: $("note").value, rule: $("rule").value, include_over_cap: $("exception").checked });
+    } catch (error) {
+      $("edit-error").textContent = error.message;
+      return;
+    }
+    $("editor").close();
+    await refresh();
+    notice("用途已保存。");
+  });
+  on("import-form", "submit", importFiles);
+  Promise.resolve().then(applyRoute).catch((error) => notice(error.message, true));
+}
+
+if (typeof document !== "undefined") bindLedger();
+if (typeof module !== "undefined") module.exports = {clusterOutflows};

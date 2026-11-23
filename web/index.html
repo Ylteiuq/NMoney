@@ -12,6 +12,7 @@
     <nav aria-label="账本导航">
       <button data-page="overview" aria-current="page">收支概览</button>
       <button data-page="details">交易明细</button>
+      <button data-page="clusters">相似支出</button>
       <button data-page="imports">导入账单</button>
     </nav>
   </aside>
@@ -67,6 +68,11 @@
       <p id="row-count" class="hint" aria-live="polite"></p>
       <div class="table-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th><th>统计状态</th><th class="money">金额 / 实付</th><th>操作</th></tr></thead><tbody id="trades"></tbody></table></div>
       <div id="pager" class="pager" hidden><button id="previous" class="quiet">上一页</button><span id="page-number"></span><button id="next" class="quiet">下一页</button></div>
+    </section>
+    <section id="clusters" hidden>
+      <div class="panel-heading"><h2>按相似度分组</h2><span id="cluster-count" class="hint"></span></div>
+      <p class="hint">模型在本机根据商户、商品文字和金额分组。展开核对后，可逐笔修改或一次确认整组中的待确认项。</p>
+      <div id="cluster-list"></div>
     </section>
     <section id="imports" hidden>
       <section class="panel upload"><h2>选择账单文件</h2>
