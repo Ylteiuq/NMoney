@@ -96,6 +96,91 @@ function post(url, payload) {
     body: JSON.stringify(payload) });
 }
 
+// 老服务仍在运行时先把新标记留在当前浏览器。按平台和订单号衔接重启后的数据库。
+const dailyKey = row => JSON.stringify([row.platform, row.order_id]);
+let storeName;
+async function choiceStore() {
+  if (!storeName) {
+    const ping = await request("/api/ping");
+    storeName = "NMoney.daily.v1:" + ping.database;
+  }
+  return storeName;
+}
+
+function stagedChoices(key) {
+  return new Map(JSON.parse(localStorage.getItem(key) || "[]"));
+}
+
+async function saveDaily(payload) {
+  if (!state.ledger.legacy_daily) return post("/api/daily", payload);
+  const key = await choiceStore();
+  return navigator.locks.request(key, () => {
+    const staged = stagedChoices(key);
+    let changed = 0;
+    const ids = new Set(payload.ids);
+    for (const row of state.ledger.rows) {
+      if (!ids.has(row.id) || !row.outflow) continue;
+      const identity = dailyKey(row);
+      if (payload.pending_only && staged.has(identity)) continue;
+      if (payload.choice === (staged.get(identity) || null)) continue;
+      if (payload.choice) staged.set(identity, payload.choice);
+      else staged.delete(identity);
+      changed++;
+    }
+    localStorage.setItem(key, JSON.stringify([...staged]));
+    return {changed};
+  });
+}
+
+async function syncChoices(key) {
+  if (!localStorage.getItem(key)) return false;
+  return navigator.locks.request(key, async () => {
+    const staged = stagedChoices(key);
+    if (!staged.size) { localStorage.removeItem(key); return false; }
+    const all = await request("/api/ledger");
+    if (!all.outflow) return false;
+    const known = all.rows.filter(r => staged.has(dailyKey(r)) && r.outflow);
+    for (const choice of ["yes", "no"]) {
+      const ids = known.filter(r => staged.get(dailyKey(r)) === choice && !r.daily_choice).map(r => r.id);
+      if (ids.length) await post("/api/daily", {ids, choice, pending_only: true});
+    }
+    for (const r of known) staged.delete(dailyKey(r));
+    if (staged.size) localStorage.setItem(key, JSON.stringify([...staged]));
+    else localStorage.removeItem(key);
+    return known.length > 0;
+  });
+}
+
+function legacyDailyReport(data, staged) {
+  data.legacy_daily = true;
+  const out = data.outflow = {count: 0, cents: 0, pending: 0, daily_unpriced: 0, extra_invested: 0};
+  const daily = data.groups["日常生活"] = {count: 0, cents: 0};
+  const months = new Map(data.months);
+  for (const month of months.values()) { month.outflow = 0; month.daily = 0; }
+  for (const row of data.rows) {
+    const unpaid = /关闭|撤销|失败|待付款|等待付款|待支付|未支付|未付款/.test(row.status);
+    row.outflow = row.direction === "支出" ? row.status.includes("退款") || !unpaid : Boolean(row.fund);
+    row.daily_choice = row.outflow ? staged.get(dailyKey(row)) || null : null;
+    row.daily = row.daily_choice === "yes";
+    row.personal = row.outflow ? row.net : null;
+    if (!row.outflow) continue;
+    if (row.category === "退款待核对") row.personal = null;
+    if (row.category === "已退款") row.personal = 0;
+    const month = months.get(row.time.slice(0, 7));
+    month.outflow += row.cents;
+    out.count++;
+    out.cents += row.cents;
+    if (row.direction !== "支出") out.extra_invested += row.cents;
+    if (!row.daily_choice) out.pending++;
+    if (row.daily) {
+      daily.count++;
+      if (row.personal === null) out.daily_unpriced++;
+      daily.cents += row.personal || 0;
+      month.daily += row.personal || 0;
+    }
+  }
+}
+
 // 正在运行的旧版服务仍会返回细分类。刷新页面即可使用相同的分类口径。
 function mergeLegacyCategories(data) {
   const aliases = new Map([["咖啡", "餐饮"], ["洗衣", "日用"], ["数码", "休闲"]]);
@@ -128,6 +213,7 @@ function navigate(page) {
     }
   }
   $("filters").hidden = page === "imports";
+  $("cap-form").hidden = page === "clusters";
   notice("");
 }
 
@@ -212,11 +298,17 @@ function periodQuery() {
 async function refresh() {
   // 快速切换月份时，慢返回的旧查询不能覆盖最后一次选择。
   const version = ++state.request;
-  const data = await request("/api/ledger?" + periodQuery());
+  const url = "/api/ledger?" + periodQuery();
+  let data = await request(url);
   if (version !== state.request) return;
+  const key = await choiceStore();
   if (!data.outflow) {
-    throw new Error("当前打开的是旧版账本服务。请在启动账本的终端按 Ctrl+C，再双击「启动账本.command」并刷新此页，以启用日常标记。");
+    legacyDailyReport(data, stagedChoices(key));
+  } else if (await syncChoices(key)) {
+    data = await request(url);
   }
+  if (version !== state.request) return;
+  $("sync-info").hidden = !data.legacy_daily;
   mergeLegacyCategories(data);
   state.ledger = data;
   const selected = $("period").value;
@@ -531,6 +623,9 @@ function on(id, event, action) {
 }
 
 function bindLedger() {
+  window.addEventListener("storage", event => {
+    if (event.key === storeName && state.ledger?.legacy_daily) refresh().catch(error => notice(error.message, true));
+  });
   for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => {
     location.hash = tab.dataset.page === "clusters" ? rangedHref(new URLSearchParams({page: "clusters"})) : tab.dataset.page;
   };
@@ -595,7 +690,7 @@ function bindLedger() {
     const buttons = button.parentElement.querySelectorAll("button");
     buttons.forEach(b => b.disabled = true);
     try {
-      const result = await post("/api/daily", {ids, choice: button.dataset.choice, pending_only: true});
+      const result = await saveDaily({ids, choice: button.dataset.choice, pending_only: true});
       await refresh();
       notice("已更新 " + result.changed + " 笔支出的日常归属。");
     } finally { buttons.forEach(b => b.disabled = false); }
@@ -607,7 +702,7 @@ function bindLedger() {
     const previous = state.ledger.rows.find(row => row.id === id)?.daily_choice;
     select.disabled = true;
     try {
-      await post("/api/daily", {ids: [id], choice: select.value || null});
+      await saveDaily({ids: [id], choice: select.value || null});
     } catch (error) {
       select.disabled = false;
       select.value = previous || "";
