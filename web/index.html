@@ -16,7 +16,8 @@
     </nav>
   </aside>
   <main>
-    <header><h1 id="title">收支概览</h1><span class="local">本地账本</span></header>
+    <a id="back-overview" href="#overview" hidden>← 收支概览</a>
+    <header><h1 id="title" tabindex="-1">收支概览</h1><span class="local">本地账本</span></header>
     <p id="notice" role="status" hidden></p>
     <section id="filters" class="toolbar" aria-label="统计范围">
       <label>时间范围<select id="period"><option value="current" selected>本月</option><option value="">全部日期</option><option value="custom">自选日期</option></select></label>
@@ -53,7 +54,7 @@
       <p class="hint">消费显示扣除退款和已关联群收款后的个人实付。商品不明的美团团购单列为「美团」，仅已确认的咖啡等用途计入日常生活。</p>
     </section>
     <section id="details" hidden>
-      <div class="detail-filters"><label>统计状态<select id="bucket"><option value="">全部状态</option><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></select></label>
+      <div class="detail-filters"><label id="bucket-field">统计状态<select id="bucket"><option value="">全部状态</option><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></select></label>
       <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label><label class="search">查找交易<input id="search" type="search" placeholder="商户、商品、分类、备注或订单号"></label></div>
       <p id="row-count" class="hint"></p>
       <div class="table-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th><th>统计状态</th><th class="money">金额 / 实付</th><th>操作</th></tr></thead><tbody id="trades"></tbody></table></div>

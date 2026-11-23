@@ -7,7 +7,7 @@ const money = (cents) => "¥" + (cents / 100).toLocaleString("zh-CN", {
 const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[c]);
-const state = { ledger: null, page: "overview", editId: null, listPage: 1, request: 0, drill: null, receiptId: null };
+const state = { ledger: null, page: "overview", editId: null, listPage: 1, request: 0, drill: null, receiptId: null, category: "" };
 const pageSize = 40;
 
 function notice(message, error = false) {
@@ -63,6 +63,46 @@ function navigate(page) {
   notice("");
 }
 
+function categoryHref(name) {
+  const params = new URLSearchParams({category: name, period: $("period").value});
+  if ($("platform").value) params.set("platform", $("platform").value);
+  if ($("period").value === "custom") {
+    for (const id of ["start", "end"]) if ($(id).value) params.set(id, $(id).value);
+  }
+  return "#" + params;
+}
+
+function applyRoute() {
+  const hash = location.hash.slice(1);
+  const params = new URLSearchParams(hash);
+  const rangeIds = ["period", "start", "end", "platform"];
+  const previousRange = rangeIds.map(id => $(id).value);
+  state.category = params.get("category") || "";
+  state.listPage = 1;
+  $("search").value = "";
+  $("bucket").value = state.category ? "已计入" : params.get("bucket") || "";
+  $("bucket-field").hidden = Boolean(state.category);
+  $("back-overview").hidden = !state.category;
+  if (state.category) {
+    const period = params.get("period") ?? "current";
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(period) && !Array.from($("period").options).some(o => o.value === period)) {
+      $("period").add(new Option(period, period));
+    }
+    $("period").value = period;
+    $("platform").value = params.get("platform") || "";
+    for (const id of ["start", "end"]) $(id).value = params.get(id) || "";
+    $("custom-dates").hidden = period !== "custom";
+    navigate("details");
+    $("title").textContent = state.category + "明细";
+  } else {
+    const detail = hash === "details" || params.has("bucket");
+    navigate(detail ? "details" : hash === "imports" ? "imports" : "overview");
+  }
+  const changedRange = rangeIds.some((id, i) => $(id).value !== previousRange[i]);
+  if (!state.ledger || changedRange) return refresh();
+  renderDetails();
+}
+
 function periodQuery() {
   const query = new URLSearchParams();
   const period = $("period").value;
@@ -99,6 +139,7 @@ async function refresh() {
   const selected = $("period").value;
   const options = [new Option("本月", "current"), new Option("全部日期", ""), new Option("自选日期", "custom")];
   for (const month of data.available_months) options.push(new Option(month, month));
+  if (!options.some(o => o.value === selected)) options.push(new Option(selected, selected));
   $("period").replaceChildren(...options);
   $("period").value = selected;
   $("cap").value = data.cap / 100;
@@ -154,12 +195,13 @@ function renderOverview(data) {
 function bars(categories) {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
   return categories.map(([name, value]) => `
-    <button type="button" class="bar-row" data-category="${escapeHTML(name)}" title="查看${escapeHTML(name)}明细">
+    <a class="bar-row" href="${escapeHTML(categoryHref(name))}" title="查看${escapeHTML(name)}明细">
       <span>${escapeHTML(name)}</span>
       <span class="track"><span class="bar" style="width:${total ? 100 * value / total : 0}%"></span></span>
       <span class="share">${total ? (100 * value / total).toFixed(1) : "0.0"}%</span>
       <span class="money">${money(value)}</span>
-    </button>`).join("") || '<p class="hint">当前范围内没有符合条件的消费。</p>';
+      <span class="bar-arrow" aria-hidden="true">›</span>
+    </a>`).join("") || '<p class="hint">当前范围内没有符合条件的消费。</p>';
 }
 
 function sortedRows(rows, mode) {
@@ -228,25 +270,19 @@ function renderDetails() {
   const bucket = $("bucket").value;
   const term = $("search").value.trim().toLowerCase();
   const rows = state.ledger.rows.filter((row) => (!bucket || row.bucket === bucket) &&
+    (!state.category || row.category === state.category) &&
     [row.merchant, row.product, row.category, row.note, row.order_id, row.status].join(" ").toLowerCase().includes(term));
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   state.listPage = Math.min(state.listPage, pages);
   const offset = (state.listPage - 1) * pageSize;
   $("trades").innerHTML = sortedRows(rows, $("detail-sort").value).slice(offset, offset + pageSize).map(tradeRow).join("") ||
     '<tr><td colspan="6">没有符合条件的交易。</td></tr>';
-  $("row-count").textContent = rows.length + " 笔交易";
+  $("row-count").textContent = rows.length + " 笔交易" + (state.category ?
+    " · 个人实付合计 " + money(rows.reduce((sum, row) => sum + row.net, 0)) : "");
   $("pager").hidden = pages <= 1;
   $("previous").disabled = state.listPage === 1;
   $("next").disabled = state.listPage === pages;
   $("page-number").textContent = state.listPage + " / " + pages;
-}
-
-function showBucket(bucket) {
-  $("bucket").value = bucket;
-  $("search").value = "";
-  state.listPage = 1;
-  navigate("details");
-  renderDetails();
 }
 
 function openEditor(id) {
@@ -318,9 +354,19 @@ function on(id, event, action) {
   });
 }
 
-for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => navigate(tab.dataset.page);
+for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => { location.hash = tab.dataset.page; };
+window.addEventListener("hashchange", () => {
+  Promise.resolve().then(applyRoute).catch(error => notice(error.message, true));
+  $("title").focus();
+  window.scrollTo(0, 0);
+});
 for (const id of ["period", "start", "end", "platform"]) {
-  on(id, "change", () => { notice(""); state.listPage = 1; return refresh(); });
+  on(id, "change", () => {
+    notice("");
+    state.listPage = 1;
+    if (state.category) history.replaceState(null, "", categoryHref(state.category));
+    return refresh();
+  });
 }
 on("cap-form", "submit", async () => {
   await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
@@ -332,19 +378,9 @@ on("open-daily", "click", () => toggleDrill("daily"));
 on("fold-drill", "click", () => toggleDrill(state.drill));
 on("drill-sort", "change", () => renderDrill());
 on("drill-category", "change", () => renderDrill());
-for (const [chart, kind] of [["categories", "included"], ["daily-bars", "daily"]]) {
-  on(chart, "click", (event) => {
-    const bar = event.target.closest("[data-category]");
-    if (!bar) return;
-    state.drill = kind;
-    renderDrill(bar.dataset.category);
-    $("drill").scrollIntoView({block: "start"});
-    $("drill-category").focus({preventScroll: true});
-  });
-}
 on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
-on("open-pending", "click", () => showBucket("待分类"));
-on("open-over", "click", () => showBucket("超上限"));
+on("open-pending", "click", () => { location.hash = new URLSearchParams({bucket: "待分类"}); });
+on("open-over", "click", () => { location.hash = new URLSearchParams({bucket: "超上限"}); });
 on("bucket", "change", () => { state.listPage = 1; renderDetails(); });
 on("search", "input", () => { state.listPage = 1; renderDetails(); });
 on("previous", "click", () => { state.listPage--; renderDetails(); });
@@ -376,4 +412,4 @@ on("edit-form", "submit", async () => {
   notice("用途已保存。");
 });
 on("import-form", "submit", importFiles);
-refresh().catch((error) => notice(error.message, true));
+Promise.resolve().then(applyRoute).catch((error) => notice(error.message, true));
