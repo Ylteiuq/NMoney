@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from .rules import CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt, payment_state, summarize
+from .rules import CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt, is_outflow, payment_state, summarize
 from .statements import Transaction
 
 
@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS merchant_rules (
 );
 CREATE TABLE IF NOT EXISTS included_exceptions (
     trade_id INTEGER PRIMARY KEY REFERENCES trades(id)
+);
+CREATE TABLE IF NOT EXISTS daily_choices (
+    trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
+    choice TEXT NOT NULL CHECK(choice IN ('yes','no'))
 );
 CREATE TABLE IF NOT EXISTS aa_links (
     receipt_id INTEGER PRIMARY KEY REFERENCES trades(id),
@@ -86,6 +90,32 @@ def set_cap(conn, cents):
     if type(cents) is not int or cents < 0:
         raise ValueError("上限必须是非负金额。")
     conn.execute("UPDATE settings SET value=? WHERE name='cap'", (cents,))
+
+
+def mark_daily(conn, ids, choice, pending_only=False):
+    if choice not in ("yes", "no", None) or type(pending_only) is not bool:
+        raise ValueError("请选择计入日常、非日常或待确认。")
+    if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids):
+        raise ValueError("请选择支出流水。")
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    changed = 0
+    for trade_id in set(ids):
+        tx = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if tx is None or not is_outflow(tx):
+            raise ValueError("只能标记实际支出的流水。")
+        if choice is None:
+            if pending_only:
+                continue
+            cursor = conn.execute("DELETE FROM daily_choices WHERE trade_id=?", (trade_id,))
+        elif pending_only:
+            cursor = conn.execute("INSERT OR IGNORE INTO daily_choices VALUES (?,?)", (trade_id, choice))
+        else:
+            cursor = conn.execute("""INSERT INTO daily_choices VALUES (?,?)
+                ON CONFLICT(trade_id) DO UPDATE SET choice=excluded.choice
+                WHERE choice != excluded.choice""", (trade_id, choice))
+        changed += cursor.rowcount
+    return changed
 
 
 def annotate(conn, trade_id, category, note="", rule="keep", include_over_cap=None):
@@ -163,12 +193,13 @@ def dashboard(conn, start="", end="", platform=""):
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     receipts = linked_receipts(conn)
     records = conn.execute("""
-        SELECT t.*, r.category AS merchant_category, x.trade_id IS NOT NULL AS include_over_cap,
+        SELECT t.*, r.category AS merchant_category, x.trade_id IS NOT NULL AS include_over_cap, d.choice AS daily_choice,
                a.expense_id AS linked_expense_id, e.merchant AS linked_merchant, e.time AS linked_time,
                e.status AS linked_status
         FROM trades t LEFT JOIN merchant_rules r
             ON t.merchant=r.merchant AND t.platform=r.platform
         LEFT JOIN included_exceptions x ON x.trade_id=t.id
+        LEFT JOIN daily_choices d ON d.trade_id=t.id
         LEFT JOIN aa_links a ON a.receipt_id=t.id
         LEFT JOIN trades e ON e.id=a.expense_id
     """ + where + " ORDER BY t.time DESC, t.id DESC", params)

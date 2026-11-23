@@ -76,7 +76,7 @@ function rangedHref(params) {
 function saveDetailFilters() {
   if (state.page !== "details") return;
   const params = new URLSearchParams(state.category ? {category: state.category} : {page: "details"});
-  if (!state.category && $("bucket").value) params.set("bucket", $("bucket").value);
+  if ($("bucket").value && (!state.category || $("bucket").value !== "已计入")) params.set("bucket", $("bucket").value);
   if ($("search").value.trim()) params.set("q", $("search").value.trim());
   history.replaceState(null, "", rangedHref(params));
 }
@@ -92,7 +92,7 @@ function applyRoute() {
   $("merchant-summary").hidden = !state.category;
   state.listPage = 1;
   $("search").value = params.get("q") || "";
-  $("bucket").value = state.category ? "已计入" : params.get("bucket") || "";
+  $("bucket").value = params.get("bucket") || (state.category ? "已计入" : "");
   $("bucket-field").hidden = Boolean(state.category);
   $("back-overview").hidden = !state.category;
   if (state.category || params.has("period")) {
@@ -145,8 +145,8 @@ async function refresh() {
   const version = ++state.request;
   const data = await request("/api/ledger?" + periodQuery());
   if (version !== state.request) return;
-  if (!Number.isInteger(data.known_spending)) {
-    throw new Error("账本服务需要重启。请在运行账本的终端按 Ctrl+C，再双击「启动账本.command」。");
+  if (!data.outflow) {
+    throw new Error("当前打开的是旧版账本服务。请在启动账本的终端按 Ctrl+C，再双击「启动账本.command」并刷新此页，以启用日常标记。");
   }
   mergeLegacyCategories(data);
   state.ledger = data;
@@ -162,16 +162,19 @@ async function refresh() {
 }
 
 function renderOverview(data) {
-  $("known-spending").textContent = money(data.known_spending);
-  $("spending-equation").textContent = "已计入 " + money(data.groups["已计入"].cents) +
-    " ＋ 超上限且用途已知 " + money(data.known_over_cap);
-  $("receipt-deduction").textContent = "已扣除原付款关联的群收款 " + money(data.deducted_receipts) +
-    "。理财买入、借出和代付另记。";
-  const cards = { "已计入": "included", "日常生活": "daily", "待分类": "pending", "超上限": "over" };
+  const out = data.outflow;
+  $("outflow-total").textContent = money(out.cents);
+  $("outflow-equation").textContent = "平台支出 " + money(out.cents - out.extra_invested) +
+    " ＋ 平台另列的理财买入 " + money(out.extra_invested);
+  $("all-outflows").textContent = "查看全部 " + out.count + " 笔支出 →";
+  $("all-outflows").href = rangedHref(new URLSearchParams({bucket: "全部支出"}));
+  $("review-count").textContent = out.pending + " 笔";
+  const cards = { "已计入": "included", "日常生活": "daily", "超上限": "over" };
   for (const [key, id] of Object.entries(cards)) {
     const group = data.groups[key];
     $(id).textContent = money(group.cents);
-    $(id + "-count").textContent = group.count + " 笔" + (id === "pending" || id === "over" ? " · 未计入" : " · 查看明细");
+    $(id + "-count").textContent = group.count + " 笔" + (id === "daily" && out.daily_unpriced ?
+      " · " + out.daily_unpriced + " 笔退款待核对" : " · 查看明细");
   }
   $("categories").innerHTML = bars(data.categories);
   $("invested").textContent = money(data.invested);
@@ -198,18 +201,18 @@ function renderOverview(data) {
   ).join("") || '<p class="hint">当前范围内没有收到群收款。</p>';
   renderDrill();
   const periods = data.months.map(([month, values]) => `
-    <tr><td>${escapeHTML(month)}</td><td>${values.count}</td>
-      <td class="money">${money(values.cents)}</td><td class="money">${money(values.invested)}</td></tr>`).join("");
+    <tr><td>${escapeHTML(month)}</td><td class="money">${money(values.outflow)}</td>
+      <td class="money">${money(values.daily)}</td><td class="money">${money(values.invested)}</td></tr>`).join("");
   $("months").innerHTML = periods ? `<div class="table-scroll"><table>
-    <thead><tr><th>月份</th><th>计入笔数</th><th class="money">个人消费</th><th class="money">理财买入</th></tr></thead>
+    <thead><tr><th>月份</th><th class="money">全部支出</th><th class="money">确认日常</th><th class="money">理财买入</th></tr></thead>
     <tbody>${periods}</tbody></table></div>` : '<p class="hint">当前范围内没有交易。</p>';
 }
 
 // 同一份分类汇总绘制概览和日常生活的条形图，标签始终显示精确到分的金额。
-function bars(categories) {
+function bars(categories, bucket = "已计入") {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
   return categories.map(([name, value]) => `
-    <a class="bar-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name})))}" title="查看${escapeHTML(name)}明细">
+    <a class="bar-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}" title="查看${escapeHTML(name)}明细">
       <span>${escapeHTML(name)}</span>
       <span class="track"><span class="bar" style="width:${total ? 100 * value / total : 0}%"></span></span>
       <span class="share">${total ? (100 * value / total).toFixed(1) : "0.0"}%</span>
@@ -218,11 +221,11 @@ function bars(categories) {
     </a>`).join("") || '<p class="hint">当前范围内没有符合条件的消费。</p>';
 }
 
-function sortedRows(rows, mode) {
+function sortedRows(rows, mode, amount = row => row.net) {
   return [...rows].sort((a, b) => {
     const byTime = a.time.localeCompare(b.time) || a.id - b.id;
-    if (mode === "highest") return b.net - a.net || -byTime;
-    if (mode === "lowest") return a.net - b.net || -byTime;
+    if (mode === "highest") return amount(b) - amount(a) || -byTime;
+    if (mode === "lowest") return amount(a) - amount(b) || -byTime;
     return mode === "oldest" ? byTime : -byTime;
   });
 }
@@ -244,16 +247,21 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   const names = new Set(rows.map((r) => r.category));
   $("drill-category").replaceChildren(new Option("全部用途", ""), ...Array.from(names).sort().map(n => new Option(n, n)));
   $("drill-category").value = names.has(selectedCategory) ? selectedCategory : "";
-  $("drill-title").textContent = daily ? "日常生活明细" : "已计入消费明细";
+  $("drill-title").textContent = daily ? "已确认日常开销明细" : "已计入消费明细";
   $("daily-chart").hidden = !daily;
-  if (daily) $("daily-bars").innerHTML = bars(state.ledger.categories.filter(([name]) => names.has(name)));
+  if (daily) {
+    const totals = new Map();
+    for (const r of rows) totals.set(r.category, (totals.get(r.category) || 0) + (r.personal || 0));
+    $("daily-bars").innerHTML = bars([...totals].sort((a, b) => b[1] - a[1]), "已确认日常");
+  }
   const visible = rows.filter((r) => !$("drill-category").value || r.category === $("drill-category").value);
-  $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + r.net, 0));
-  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value).map(tradeRow).join("") ||
+  const amount = r => daily ? r.personal || 0 : r.net;
+  $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + amount(r), 0));
+  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r)).join("") ||
     '<tr><td colspan="6">当前范围内没有符合条件的消费。</td></tr>';
 }
 
-function tradeRow(row) {
+function tradeRow(row, gross = false) {
   const tagClass = { "待分类": "pending", "已计入": "included" }[row.bucket] || "";
   const info = [row.platform, row.direction, row.status, "订单号 " + row.order_id];
   if (row.note) info.push("备注 " + row.note);
@@ -268,6 +276,14 @@ function tradeRow(row) {
   } else if (row.group_receipt) {
     edit = `<button class="row-action" data-receipt="${row.id}">关联付款</button>`;
   }
+  if (row.outflow) {
+    const choices = [["", "待确认"], ["yes", "计入日常"], ["no", "非日常"]];
+    edit += `<select class="daily-select" data-daily="${row.id}" aria-label="日常归属 · ${escapeHTML(row.merchant)}">${choices.map(
+      ([value, label]) => `<option value="${value}"${value === (row.daily_choice || "") ? " selected" : ""}>${label}</option>`
+    ).join("")}</select>`;
+  }
+  const net = row.outflow ? row.personal : row.net;
+  const personal = net === null ? "退款待核对" : money(net);
   return `<tr>
     <td><time>${escapeHTML(row.time.slice(0, 10))}</time>
       <small>${escapeHTML(row.platform)} · ${escapeHTML(row.time.slice(11))}</small></td>
@@ -275,7 +291,8 @@ function tradeRow(row) {
       <small>${info.map(escapeHTML).join("<br>")}</small></details><small>${escapeHTML(row.product)}</small></td>
     <td>${escapeHTML(row.category)}</td>
     <td><span class="tag ${tagClass}">${escapeHTML(row.bucket)}</span></td>
-    <td class="money">${money(row.net)}${row.net !== row.cents ? `<small>原付 ${money(row.cents)}</small>` : ""}</td><td>${edit}</td>
+    <td class="money">${gross ? money(row.cents) : personal}${net !== row.cents ?
+      `<small>${gross ? "实付 " + personal : "原付 " + money(row.cents)}</small>` : ""}</td><td>${edit}</td>
   </tr>`;
 }
 
@@ -290,7 +307,7 @@ function renderMerchants(rows) {
     const name = merchantLabel(row);
     const group = merchants.get(name) || {count: 0, cents: 0};
     group.count++;
-    group.cents += row.net;
+    group.cents += row.outflow ? row.personal || 0 : row.net;
     merchants.set(name, group);
   }
   $("merchant-list").innerHTML = [...merchants].sort((a, b) => b[1].cents - a[1].cents ||
@@ -321,7 +338,15 @@ function renderDetails() {
   if (!state.ledger) return;
   const bucket = $("bucket").value;
   const matchesSearch = transactionSearch($("search").value);
-  const matching = state.ledger.rows.filter((row) => (!bucket || row.bucket === bucket) &&
+  const dailyFilters = {"日常待确认": null, "已确认日常": "yes", "已确认非日常": "no"};
+  const gross = bucket === "全部支出" || bucket === "日常待确认" || bucket === "已确认非日常";
+  const amount = r => gross ? r.cents : r.outflow ? r.personal || 0 : r.net;
+  const matchesBucket = row => {
+    if (bucket === "全部支出") return row.outflow;
+    if (Object.hasOwn(dailyFilters, bucket)) return row.outflow && row.daily_choice === dailyFilters[bucket];
+    return !bucket || row.bucket === bucket;
+  };
+  const matching = state.ledger.rows.filter((row) => matchesBucket(row) &&
     (!state.category || row.category === state.category) && matchesSearch(row));
   if (state.category) renderMerchants(matching);
   const rows = state.merchant === null ? matching : matching.filter(row => merchantLabel(row) === state.merchant);
@@ -330,10 +355,10 @@ function renderDetails() {
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   state.listPage = Math.min(state.listPage, pages);
   const offset = (state.listPage - 1) * pageSize;
-  $("trades").innerHTML = sortedRows(rows, $("detail-sort").value).slice(offset, offset + pageSize).map(tradeRow).join("") ||
+  $("trades").innerHTML = sortedRows(rows, $("detail-sort").value, amount).slice(offset, offset + pageSize).map(r => tradeRow(r, gross)).join("") ||
     '<tr><td colspan="6">没有符合条件的交易。</td></tr>';
-  $("row-count").textContent = rows.length + " 笔交易" + (state.category ?
-    " · 个人实付合计 " + money(rows.reduce((sum, row) => sum + row.net, 0)) : "");
+  $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" ?
+    (gross ? " · 原付合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
   $("pager").hidden = pages <= 1;
   $("previous").disabled = state.listPage === 1;
   $("next").disabled = state.listPage === pages;
@@ -434,8 +459,9 @@ on("fold-drill", "click", () => toggleDrill(state.drill));
 on("drill-sort", "change", () => renderDrill());
 on("drill-category", "change", () => renderDrill());
 on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
-on("open-pending", "click", () => { location.hash = new URLSearchParams({bucket: "待分类"}); });
-on("open-over", "click", () => { location.hash = new URLSearchParams({bucket: "超上限"}); });
+for (const [id, bucket] of [["open-pending", "待分类"], ["open-over", "超上限"], ["open-review", "日常待确认"]]) {
+  on(id, "click", () => { location.hash = rangedHref(new URLSearchParams({bucket})); });
+}
 for (const [id, event] of [["bucket", "change"], ["search", "input"]]) {
   on(id, event, () => {
     state.listPage = 1;
@@ -461,6 +487,25 @@ on("clear-merchant", "click", () => {
 on("previous", "click", () => { state.listPage--; renderDetails(); });
 on("next", "click", () => { state.listPage++; renderDetails(); });
 for (const id of ["trades", "drill-trades", "aa-list"]) on(id, "click", rowAction);
+document.addEventListener("change", async event => {
+  const select = event.target.closest("[data-daily]");
+  if (!select) return;
+  const id = Number(select.dataset.daily);
+  const previous = state.ledger.rows.find(row => row.id === id)?.daily_choice;
+  select.disabled = true;
+  try {
+    await post("/api/daily", {ids: [id], choice: select.value || null});
+  } catch (error) {
+    select.disabled = false;
+    select.value = previous || "";
+    notice(error.message, true);
+    return;
+  }
+  try {
+    await refresh();
+    notice("已保存这笔支出的日常归属。");
+  } catch (error) { notice(error.message, true); }
+});
 on("aa-close", "click", () => $("aa-editor").close());
 on("aa-form", "submit", async () => {
   try {

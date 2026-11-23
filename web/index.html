@@ -28,14 +28,14 @@
       <form id="cap-form"><label>单笔上限（元）<input id="cap" type="number" min="0" step="0.01" required></label><button class="quiet">应用</button></form>
     </section>
     <section id="overview">
-      <section class="reconciliation" aria-label="消费对账">
-        <div><h2>含超上限的已知消费</h2><strong id="known-spending">—</strong></div>
-        <div class="reconcile-notes"><p id="spending-equation"></p><p id="receipt-deduction" class="hint"></p></div>
+      <section class="reconciliation" aria-label="支出对账">
+        <div><h2>全部支出 · 原付金额</h2><strong id="outflow-total">—</strong></div>
+        <div class="reconcile-notes"><p id="outflow-equation"></p><a id="all-outflows" href="#bucket=全部支出">查看每笔支出 →</a></div>
       </section>
       <div class="cards">
-        <button class="card primary clickable" id="open-included" aria-expanded="false" aria-controls="drill"><h2>已计入消费 <span>⌄</span></h2><strong id="included">—</strong><small id="included-count"></small></button>
-        <button class="card clickable" id="open-daily" aria-expanded="false" aria-controls="drill"><h2>其中日常生活 <span>⌄</span></h2><strong id="daily">—</strong><small id="daily-count"></small></button>
-        <button class="card clickable" id="open-pending"><h2>待分类 <span>↗</span></h2><strong id="pending">—</strong><small id="pending-count"></small></button>
+        <button class="card primary clickable" id="open-daily" aria-expanded="false" aria-controls="drill"><h2>已确认日常开销 <span>⌄</span></h2><strong id="daily">—</strong><small id="daily-count"></small></button>
+        <button class="card clickable" id="open-review"><h2>日常归属待确认 <span>↗</span></h2><strong id="review-count">—</strong><small>逐笔划分</small></button>
+        <button class="card clickable" id="open-included" aria-expanded="false" aria-controls="drill"><h2>按用途计入的消费 <span>⌄</span></h2><strong id="included">—</strong><small id="included-count"></small></button>
         <button class="card clickable" id="open-over"><h2>超上限 <span>↗</span></h2><strong id="over">—</strong><small id="over-count"></small></button>
       </div>
       <section id="drill" class="panel drill" hidden>
@@ -46,17 +46,17 @@
         <div class="table-scroll drill-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th><th>统计状态</th><th class="money">个人实付</th><th>操作</th></tr></thead><tbody id="drill-trades"></tbody></table></div>
       </section>
       <div class="panels">
-        <section class="panel"><h2>已计入消费构成</h2><div id="categories"></div></section>
+        <section class="panel"><h2>已计入消费构成</h2><div id="categories"></div><button id="open-pending" class="row-action">查看用途待分类的付款</button></section>
         <section class="panel"><h2>按月统计</h2><div id="months"></div></section>
         <section class="panel"><div class="panel-heading"><h2>理财买入</h2><strong class="money" id="invested"></strong></div><div id="funds"></div></section>
         <section class="panel"><div class="panel-heading"><h2>群收款分摊</h2><span class="hint" id="aa-count"></span></div><div id="aa-list"></div></section>
       </div>
-      <p class="hint">消费显示扣除退款和已关联群收款后的个人实付。商品不明的美团团购单列为「美团」，仅已确认的咖啡等用途计入日常生活。</p>
+      <p class="hint">全部支出保留付款原额。日常开销只汇总你确认的流水，按扣除退款和已关联群收款后的金额计算。用途和单笔上限只影响消费分类报表。</p>
     </section>
     <section id="details" hidden>
       <div class="detail-filters">
         <label class="search">关键词搜索<input id="search" type="search" placeholder="搜商户、商品、金额或备注，可用空格组合"></label>
-        <label id="bucket-field">统计状态<select id="bucket"><option value="">全部状态</option><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></select></label>
+        <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>全部支出</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></optgroup></select></label>
         <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
       </div>
       <details id="merchant-summary" class="panel" hidden>

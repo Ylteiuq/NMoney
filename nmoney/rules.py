@@ -94,6 +94,18 @@ def after_refund(tx):
     return max(0, tx["cents"] - (refunded_cents(tx["status"]) or 0))
 
 
+def is_outflow(tx):
+    """平台支出按付款原额入账；不计收支的理财只有确认买入才是资金流出。"""
+    if tx["direction"] != "支出":
+        return bool(investment_product(tx))
+    status = tx["status"]
+    if "退款" in status:  # 退款流程发生在原付款之后。
+        return True
+    return not any(word in status for word in (
+        "关闭", "撤销", "失败", "待付款", "等待付款", "待支付", "未支付", "未付款",
+    ))
+
+
 def evaluate(tx, cap, receipts=()):
     """AA 回款归到原付款日。个人实付先扣平台退款，再扣已关联的朋友回款。"""
     state = payment_state(tx)
@@ -114,9 +126,16 @@ def evaluate(tx, cap, receipts=()):
         bucket = "待分类"
     else:
         bucket = "已计入"
+    outflow = is_outflow(tx)
+    personal = net
+    if state == "退款待核对":
+        personal = None
+    elif state == "已退款":
+        personal = 0
     return dict(tx, manual_category=manual, merchant_category=merchant, category=category,
                 bucket=bucket, net=net, editable=state == "支出",
-                daily=bucket == "已计入" and category in DAILY, group_receipt=is_group_receipt(tx),
+                outflow=outflow, personal=personal if outflow else None,
+                daily=outflow and tx["daily_choice"] == "yes", group_receipt=is_group_receipt(tx),
                 receipts=receipts, received=received, fund=investment_product(tx))
 
 
@@ -124,11 +143,28 @@ def summarize(rows):
     groups = {key: {"count": 0, "cents": 0} for key in ("已计入", "日常生活", "待分类", "超上限")}
     categories = defaultdict(int)
     funds = defaultdict(lambda: {"count": 0, "cents": 0})
-    months = defaultdict(lambda: {"cents": 0, "count": 0, "pending": 0, "invested": 0})
+    months = defaultdict(lambda: {"cents": 0, "count": 0, "pending": 0, "invested": 0,
+                                 "outflow": 0, "daily": 0})
+    outflow = {"count": 0, "cents": 0, "pending": 0, "daily_unpriced": 0, "extra_invested": 0}
     known_over_cap = 0
     deducted_receipts = 0
     for row in rows:
         month = months[row["time"][:7]]
+        if row["outflow"]:
+            outflow["count"] += 1
+            outflow["cents"] += row["cents"]
+            month["outflow"] += row["cents"]
+            if row["direction"] != "支出":
+                outflow["extra_invested"] += row["cents"]
+            if not row["daily_choice"]:
+                outflow["pending"] += 1
+            if row["daily"]:
+                groups["日常生活"]["count"] += 1
+                if row["personal"] is None:
+                    outflow["daily_unpriced"] += 1
+                else:
+                    groups["日常生活"]["cents"] += row["personal"]
+                    month["daily"] += row["personal"]
         if row["fund"]:
             fund = funds[row["fund"]]
             fund["count"] += 1
@@ -149,10 +185,7 @@ def summarize(rows):
             categories[row["category"]] += row["net"]
             month["count"] += 1
             month["cents"] += row["net"]
-            if row["daily"]:
-                groups["日常生活"]["count"] += 1
-                groups["日常生活"]["cents"] += row["net"]
-    return {"groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
+    return {"outflow": outflow, "groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
             "known_spending": groups["已计入"]["cents"] + known_over_cap,
             "categories": sorted(categories.items(), key=lambda pair: -pair[1]),
             "funds": sorted(funds.items(), key=lambda pair: -pair[1]["cents"]),

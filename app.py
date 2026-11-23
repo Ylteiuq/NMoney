@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 from urllib.request import urlopen
 from wsgiref.simple_server import make_server
 
-from nmoney.ledger import DEFAULT_DB, annotate, dashboard, database, import_statement, initialize, link_receipt, set_cap
+from nmoney.ledger import DEFAULT_DB, annotate, dashboard, database, import_statement, initialize, link_receipt, mark_daily, set_cap
 from nmoney.statements import parse_statement
 
 
@@ -48,6 +48,8 @@ def api(conn, path, query, body):
         link_receipt(conn, payload["receipt_id"], payload["expense_id"])
     elif path == "/api/cap":
         set_cap(conn, payload["cents"])
+    elif path == "/api/daily":
+        return {"changed": mark_daily(conn, payload["ids"], payload["choice"], payload.get("pending_only", False))}
     return {"ok": True}
 
 
@@ -63,7 +65,7 @@ def application(db_path):
             name, mime = ASSETS[path]
             data = (WEB / name).read_bytes()
         elif (method, path) in {("GET", "/api/aa-options"), ("POST", "/api/aa"), ("GET", "/api/ping"), ("GET", "/api/ledger"), ("POST", "/api/import"),
-                                ("POST", "/api/annotate"), ("POST", "/api/cap")}:
+                                ("POST", "/api/annotate"), ("POST", "/api/cap"), ("POST", "/api/daily")}:
             try:
                 # 自定义请求头限制外站表单写入本地账本。浏览器页面与 API 来自同一地址。
                 if method == "POST" and env.get("HTTP_X_NMONEY") != "1":
