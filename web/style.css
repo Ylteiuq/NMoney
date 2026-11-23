@@ -72,7 +72,7 @@ th { font-weight: 550; color: var(--muted); white-space: nowrap; font-size: 13px
 td small { display: block; color: var(--muted); overflow-wrap: anywhere; max-width: 26em; }
 td time, .tag, .row-action { white-space: nowrap; }
 .detail-filters { margin: 2px 0 8px; }
-.search { flex: 1; max-width: 390px; }
+.search { flex: 1 1 min(100%, 290px); max-width: 480px; }
 #row-count { margin: 9px 0; }
 .tag { background: #eef1f6; color: #495e77; border-radius: 4px; font-size: 12px; padding: 3px 7px; }
 .tag.pending { background: #fff0cf; color: #815619; }

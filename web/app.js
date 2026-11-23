@@ -64,13 +64,21 @@ function navigate(page) {
   notice("");
 }
 
-function categoryHref(name) {
-  const params = new URLSearchParams({category: name, period: $("period").value});
+function rangedHref(params) {
+  params.set("period", $("period").value);
   if ($("platform").value) params.set("platform", $("platform").value);
   if ($("period").value === "custom") {
     for (const id of ["start", "end"]) if ($(id).value) params.set(id, $(id).value);
   }
   return "#" + params;
+}
+
+function saveDetailFilters() {
+  if (state.page !== "details") return;
+  const params = new URLSearchParams(state.category ? {category: state.category} : {page: "details"});
+  if (!state.category && $("bucket").value) params.set("bucket", $("bucket").value);
+  if ($("search").value.trim()) params.set("q", $("search").value.trim());
+  history.replaceState(null, "", rangedHref(params));
 }
 
 function applyRoute() {
@@ -83,11 +91,11 @@ function applyRoute() {
   $("merchant-summary").open = false;
   $("merchant-summary").hidden = !state.category;
   state.listPage = 1;
-  $("search").value = "";
+  $("search").value = params.get("q") || "";
   $("bucket").value = state.category ? "已计入" : params.get("bucket") || "";
   $("bucket-field").hidden = Boolean(state.category);
   $("back-overview").hidden = !state.category;
-  if (state.category) {
+  if (state.category || params.has("period")) {
     const period = params.get("period") ?? "current";
     if (/^\d{4}-(0[1-9]|1[0-2])$/.test(period) && !Array.from($("period").options).some(o => o.value === period)) {
       $("period").add(new Option(period, period));
@@ -96,10 +104,12 @@ function applyRoute() {
     $("platform").value = params.get("platform") || "";
     for (const id of ["start", "end"]) $(id).value = params.get(id) || "";
     $("custom-dates").hidden = period !== "custom";
+  }
+  if (state.category) {
     navigate("details");
     $("title").textContent = state.category + "明细";
   } else {
-    const detail = hash === "details" || params.has("bucket");
+    const detail = hash === "details" || params.get("page") === "details" || params.has("bucket") || params.has("q");
     navigate(detail ? "details" : hash === "imports" ? "imports" : "overview");
   }
   const changedRange = rangeIds.some((id, i) => $(id).value !== previousRange[i]);
@@ -199,7 +209,7 @@ function renderOverview(data) {
 function bars(categories) {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
   return categories.map(([name, value]) => `
-    <a class="bar-row" href="${escapeHTML(categoryHref(name))}" title="查看${escapeHTML(name)}明细">
+    <a class="bar-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name})))}" title="查看${escapeHTML(name)}明细">
       <span>${escapeHTML(name)}</span>
       <span class="track"><span class="bar" style="width:${total ? 100 * value / total : 0}%"></span></span>
       <span class="share">${total ? (100 * value / total).toFixed(1) : "0.0"}%</span>
@@ -290,13 +300,29 @@ function renderMerchants(rows) {
     '<tr><td colspan="3">当前范围内没有商户交易。</td></tr>';
 }
 
+function transactionSearch(input) {
+  const normalize = value => value.normalize("NFKC").toLowerCase();
+  const terms = normalize(input).trim().split(/\s+/).filter(Boolean).map(word => {
+    const amount = /^(¥)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(元)?$/.exec(word);
+    if (!amount) return {word};
+    const cents = Number(amount[2].replace(/,/g, "")) * 100 + Number((amount[3] || "").padEnd(2, "0"));
+    return {word, cents, amountOnly: Boolean(amount[1] || amount[4])};
+  });
+  if (!terms.length) return () => true;
+  return row => {
+    const text = normalize([row.merchant, row.product, row.category, row.note, row.order_id,
+      row.time, row.platform, row.direction, row.bucket, row.status, row.source_category].join(" "));
+    return terms.every(term => term.cents === row.cents || term.cents === row.net ||
+      (!term.amountOnly && text.includes(term.word)));
+  };
+}
+
 function renderDetails() {
   if (!state.ledger) return;
   const bucket = $("bucket").value;
-  const term = $("search").value.trim().toLowerCase();
+  const matchesSearch = transactionSearch($("search").value);
   const matching = state.ledger.rows.filter((row) => (!bucket || row.bucket === bucket) &&
-    (!state.category || row.category === state.category) &&
-    [row.merchant, row.product, row.category, row.note, row.order_id, row.status].join(" ").toLowerCase().includes(term));
+    (!state.category || row.category === state.category) && matchesSearch(row));
   if (state.category) renderMerchants(matching);
   const rows = state.merchant === null ? matching : matching.filter(row => merchantLabel(row) === state.merchant);
   $("clear-merchant").hidden = state.merchant === null;
@@ -393,7 +419,7 @@ for (const id of ["period", "start", "end", "platform"]) {
   on(id, "change", () => {
     notice("");
     state.listPage = 1;
-    if (state.category) history.replaceState(null, "", categoryHref(state.category));
+    saveDetailFilters();
     return refresh();
   });
 }
@@ -410,8 +436,13 @@ on("drill-category", "change", () => renderDrill());
 on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
 on("open-pending", "click", () => { location.hash = new URLSearchParams({bucket: "待分类"}); });
 on("open-over", "click", () => { location.hash = new URLSearchParams({bucket: "超上限"}); });
-on("bucket", "change", () => { state.listPage = 1; renderDetails(); });
-on("search", "input", () => { state.listPage = 1; renderDetails(); });
+for (const [id, event] of [["bucket", "change"], ["search", "input"]]) {
+  on(id, event, () => {
+    state.listPage = 1;
+    saveDetailFilters();
+    renderDetails();
+  });
+}
 on("merchant-list", "click", event => {
   const button = event.target.closest("[data-merchant]");
   if (!button) return;

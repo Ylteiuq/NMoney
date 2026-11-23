@@ -54,8 +54,11 @@
       <p class="hint">消费显示扣除退款和已关联群收款后的个人实付。商品不明的美团团购单列为「美团」，仅已确认的咖啡等用途计入日常生活。</p>
     </section>
     <section id="details" hidden>
-      <div class="detail-filters"><label id="bucket-field">统计状态<select id="bucket"><option value="">全部状态</option><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></select></label>
-      <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label><label class="search">查找交易<input id="search" type="search" placeholder="商户、商品、分类、备注或订单号"></label></div>
+      <div class="detail-filters">
+        <label class="search">关键词搜索<input id="search" type="search" placeholder="搜商户、商品、金额或备注，可用空格组合"></label>
+        <label id="bucket-field">统计状态<select id="bucket"><option value="">全部状态</option><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></select></label>
+        <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
+      </div>
       <details id="merchant-summary" class="panel" hidden>
         <summary>按商户汇总</summary>
         <div class="table-scroll"><table><thead><tr><th>商户</th><th class="money">笔数</th><th class="money">个人实付</th></tr></thead><tbody id="merchant-list"></tbody></table></div>
