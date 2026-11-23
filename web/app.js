@@ -7,7 +7,8 @@ const money = (cents) => "¥" + (cents / 100).toLocaleString("zh-CN", {
 const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[c]);
-const state = { ledger: null, page: "overview", editId: null, listPage: 1, request: 0, drill: null, receiptId: null, category: "" };
+const state = { ledger: null, page: "overview", editId: null, listPage: 1, request: 0, drill: null,
+  receiptId: null, category: "", merchant: null };
 const pageSize = 40;
 
 function notice(message, error = false) {
@@ -78,6 +79,9 @@ function applyRoute() {
   const rangeIds = ["period", "start", "end", "platform"];
   const previousRange = rangeIds.map(id => $(id).value);
   state.category = params.get("category") || "";
+  state.merchant = null;
+  $("merchant-summary").open = false;
+  $("merchant-summary").hidden = !state.category;
   state.listPage = 1;
   $("search").value = "";
   $("bucket").value = state.category ? "已计入" : params.get("bucket") || "";
@@ -265,13 +269,38 @@ function tradeRow(row) {
   </tr>`;
 }
 
+function merchantLabel(row) {
+  const name = row.merchant.trim();
+  return name && name !== "/" ? name : "未标明商户";
+}
+
+function renderMerchants(rows) {
+  const merchants = new Map();
+  for (const row of rows) {
+    const name = merchantLabel(row);
+    const group = merchants.get(name) || {count: 0, cents: 0};
+    group.count++;
+    group.cents += row.net;
+    merchants.set(name, group);
+  }
+  $("merchant-list").innerHTML = [...merchants].sort((a, b) => b[1].cents - a[1].cents ||
+    a[0].localeCompare(b[0], "zh-CN")).map(([name, group]) => `<tr>
+      <td><button class="row-action" data-merchant="${escapeHTML(name)}">${escapeHTML(name)}</button></td>
+      <td class="money">${group.count}</td><td class="money">${money(group.cents)}</td></tr>`).join("") ||
+    '<tr><td colspan="3">当前范围内没有商户交易。</td></tr>';
+}
+
 function renderDetails() {
   if (!state.ledger) return;
   const bucket = $("bucket").value;
   const term = $("search").value.trim().toLowerCase();
-  const rows = state.ledger.rows.filter((row) => (!bucket || row.bucket === bucket) &&
+  const matching = state.ledger.rows.filter((row) => (!bucket || row.bucket === bucket) &&
     (!state.category || row.category === state.category) &&
     [row.merchant, row.product, row.category, row.note, row.order_id, row.status].join(" ").toLowerCase().includes(term));
+  if (state.category) renderMerchants(matching);
+  const rows = state.merchant === null ? matching : matching.filter(row => merchantLabel(row) === state.merchant);
+  $("clear-merchant").hidden = state.merchant === null;
+  if (state.merchant !== null) $("clear-merchant").textContent = "清除商户筛选 · " + state.merchant + " ×";
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   state.listPage = Math.min(state.listPage, pages);
   const offset = (state.listPage - 1) * pageSize;
@@ -383,6 +412,21 @@ on("open-pending", "click", () => { location.hash = new URLSearchParams({bucket:
 on("open-over", "click", () => { location.hash = new URLSearchParams({bucket: "超上限"}); });
 on("bucket", "change", () => { state.listPage = 1; renderDetails(); });
 on("search", "input", () => { state.listPage = 1; renderDetails(); });
+on("merchant-list", "click", event => {
+  const button = event.target.closest("[data-merchant]");
+  if (!button) return;
+  state.merchant = button.dataset.merchant;
+  state.listPage = 1;
+  $("merchant-summary").open = false;
+  renderDetails();
+  $("clear-merchant").focus();
+});
+on("clear-merchant", "click", () => {
+  state.merchant = null;
+  state.listPage = 1;
+  renderDetails();
+  $("merchant-summary").querySelector("summary").focus();
+});
 on("previous", "click", () => { state.listPage--; renderDetails(); });
 on("next", "click", () => { state.listPage++; renderDetails(); });
 for (const id of ["trades", "drill-trades", "aa-list"]) on(id, "click", rowAction);

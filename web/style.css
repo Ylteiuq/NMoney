@@ -101,3 +101,6 @@ dialog label { margin-top: 13px; }
 .fund-orders { padding-left: 0; margin: 6px 0; list-style: none; }
 .fund-orders li { margin: 5px 0; font-variant-numeric: tabular-nums; }
 summary { cursor: pointer; }
+#merchant-summary { margin: 14px 0; padding: 12px 16px; }
+#merchant-summary[open] summary { margin-bottom: 8px; }
+#merchant-summary .row-action { text-align: left; white-space: normal; }
