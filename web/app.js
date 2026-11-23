@@ -98,6 +98,7 @@ function post(url, payload) {
 
 // 老服务仍在运行时先把新标记留在当前浏览器。按平台和订单号衔接重启后的数据库。
 const dailyKey = row => JSON.stringify([row.platform, row.order_id]);
+const initialDaily = row => ["yes", "no"].includes(row.initial_daily) ? row.initial_daily : null;
 let storeName;
 async function choiceStore() {
   if (!storeName) {
@@ -121,9 +122,10 @@ async function saveDaily(payload) {
     for (const row of state.ledger.rows) {
       if (!ids.has(row.id) || !row.outflow) continue;
       const identity = dailyKey(row);
-      if (payload.pending_only && staged.has(identity)) continue;
-      if (payload.choice === (staged.get(identity) || null)) continue;
-      if (payload.choice) staged.set(identity, payload.choice);
+      const previous = staged.has(identity) ? staged.get(identity) : initialDaily(row);
+      if (payload.pending_only && previous) continue;
+      if (payload.choice === previous) continue;
+      if (payload.choice || row.initial_daily) staged.set(identity, payload.choice);
       else staged.delete(identity);
       changed++;
     }
@@ -140,9 +142,10 @@ async function syncChoices(key) {
     const all = await request("/api/ledger");
     if (!all.outflow) return false;
     const known = all.rows.filter(r => staged.has(dailyKey(r)) && r.outflow);
-    for (const choice of ["yes", "no"]) {
-      const ids = known.filter(r => staged.get(dailyKey(r)) === choice && !r.daily_choice).map(r => r.id);
-      if (ids.length) await post("/api/daily", {ids, choice, pending_only: true});
+    for (const choice of ["yes", "no", null]) {
+      const ids = known.filter(r => staged.get(dailyKey(r)) === choice &&
+        !(Object.hasOwn(r, "manual_daily") ? r.manual_daily : r.daily_choice)).map(r => r.id);
+      if (ids.length) await post("/api/daily", {ids, choice, pending_only: true, sync_staged: true});
     }
     for (const r of known) staged.delete(dailyKey(r));
     if (staged.size) localStorage.setItem(key, JSON.stringify([...staged]));
@@ -160,7 +163,9 @@ function legacyDailyReport(data, staged) {
   for (const row of data.rows) {
     const unpaid = /关闭|撤销|失败|待付款|等待付款|待支付|未支付|未付款/.test(row.status);
     row.outflow = row.direction === "支出" ? row.status.includes("退款") || !unpaid : Boolean(row.fund);
-    row.daily_choice = row.outflow ? staged.get(dailyKey(row)) || null : null;
+    const key = dailyKey(row);
+    row.manual_daily = staged.get(key) || null;
+    row.daily_choice = row.outflow ? (staged.has(key) ? staged.get(key) : initialDaily(row)) : null;
     row.daily = row.daily_choice === "yes";
     row.personal = row.outflow ? row.net : null;
     if (!row.outflow) continue;
@@ -435,7 +440,7 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   const names = new Set(rows.map((r) => r.category));
   $("drill-category").replaceChildren(new Option("全部用途", ""), ...Array.from(names).sort().map(n => new Option(n, n)));
   $("drill-category").value = names.has(selectedCategory) ? selectedCategory : "";
-  $("drill-title").textContent = daily ? "已确认日常开销明细" : "已计入消费明细";
+  $("drill-title").textContent = daily ? "日常开销明细" : "已计入消费明细";
   $("daily-chart").hidden = !daily;
   if (daily) {
     const totals = new Map();
@@ -453,6 +458,7 @@ function tradeRow(row, gross = false) {
   const tagClass = { "待分类": "pending", "已计入": "included" }[row.bucket] || "";
   const info = [row.platform, row.direction, row.status, "订单号 " + row.order_id];
   if (row.note) info.push("备注 " + row.note);
+  if (row.daily_choice && row.initial_daily && !row.manual_daily) info.push("日常归属来自本次初分，可手动调整");
   for (const receipt of row.receipts) {
     info.push("群收款 " + receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents));
   }
