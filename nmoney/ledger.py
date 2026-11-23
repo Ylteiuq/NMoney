@@ -62,6 +62,12 @@ def database(path=DEFAULT_DB):
 def initialize(path=DEFAULT_DB):
     with database(path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("BEGIN IMMEDIATE")
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(trades)")}
+        if "initial_daily" not in columns:
+            conn.execute("ALTER TABLE trades ADD COLUMN initial_daily TEXT CHECK(initial_daily IN ('yes','no','pending'))")
+        if "initial_category" not in columns:
+            conn.execute("ALTER TABLE trades ADD COLUMN initial_category TEXT")
 
 
 def import_statement(conn, statement):
@@ -92,8 +98,9 @@ def set_cap(conn, cents):
     conn.execute("UPDATE settings SET value=? WHERE name='cap'", (cents,))
 
 
-def mark_daily(conn, ids, choice, pending_only=False):
-    if choice not in ("yes", "no", None) or type(pending_only) is not bool:
+def mark_daily(conn, ids, choice, pending_only=False, sync_staged=False):
+    if (choice not in ("yes", "no", None) or type(pending_only) is not bool
+            or type(sync_staged) is not bool or (sync_staged and not pending_only)):
         raise ValueError("请选择计入日常、非日常或待确认。")
     if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids):
         raise ValueError("请选择支出流水。")
@@ -104,10 +111,19 @@ def mark_daily(conn, ids, choice, pending_only=False):
         tx = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
         if tx is None or not is_outflow(tx):
             raise ValueError("只能标记实际支出的流水。")
+        if pending_only and tx["initial_daily"] in ("yes", "no") and not sync_staged:
+            continue
+        if sync_staged and tx["initial_daily"] == "pending" and choice is not None:
+            continue
         if choice is None:
-            if pending_only:
+            # 首次划分只是可撤销的起点。回到待确认时一并清除，否则刷新会重新计入。
+            if pending_only and conn.execute("SELECT 1 FROM daily_choices WHERE trade_id=?", (trade_id,)).fetchone():
                 continue
-            cursor = conn.execute("DELETE FROM daily_choices WHERE trade_id=?", (trade_id,))
+            cleared = conn.execute("UPDATE trades SET initial_daily='pending' WHERE id=? AND initial_daily IS NOT 'pending'",
+                                   (trade_id,)).rowcount
+            removed = conn.execute("DELETE FROM daily_choices WHERE trade_id=?", (trade_id,)).rowcount
+            changed += int(bool(cleared or removed))
+            continue
         elif pending_only:
             cursor = conn.execute("INSERT OR IGNORE INTO daily_choices VALUES (?,?)", (trade_id, choice))
         else:

@@ -49,7 +49,8 @@ def api(conn, path, query, body):
     elif path == "/api/cap":
         set_cap(conn, payload["cents"])
     elif path == "/api/daily":
-        return {"changed": mark_daily(conn, payload["ids"], payload["choice"], payload.get("pending_only", False))}
+        return {"changed": mark_daily(conn, payload["ids"], payload["choice"], payload.get("pending_only", False),
+                                      payload.get("sync_staged", False))}
     return {"ok": True}
 
 

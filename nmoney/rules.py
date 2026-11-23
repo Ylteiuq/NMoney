@@ -112,6 +112,8 @@ def evaluate(tx, cap, receipts=()):
     manual = LEGACY_CATEGORIES.get(tx["manual_category"], tx["manual_category"])
     merchant = LEGACY_CATEGORIES.get(tx["merchant_category"], tx["merchant_category"])
     category = manual or merchant or guess_category(tx)
+    if category == "未知" and not manual and not merchant and tx["initial_category"]:
+        category = tx["initial_category"]
     received = sum(receipt["cents"] for receipt in receipts)
     net = tx["cents"]
     if state == "支出":
@@ -127,6 +129,9 @@ def evaluate(tx, cap, receipts=()):
     else:
         bucket = "已计入"
     outflow = is_outflow(tx)
+    initial = tx["initial_daily"]
+    manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
+    daily_choice = tx["daily_choice"] or (initial if initial in ("yes", "no") else None)
     personal = net
     if state == "退款待核对":
         personal = None
@@ -135,7 +140,8 @@ def evaluate(tx, cap, receipts=()):
     return dict(tx, manual_category=manual, merchant_category=merchant, category=category,
                 bucket=bucket, net=net, editable=state == "支出",
                 outflow=outflow, personal=personal if outflow else None,
-                daily=outflow and tx["daily_choice"] == "yes", group_receipt=is_group_receipt(tx),
+                manual_daily=manual_daily, daily_choice=daily_choice,
+                daily=outflow and daily_choice == "yes", group_receipt=is_group_receipt(tx),
                 receipts=receipts, received=received, fund=investment_product(tx))
 
 

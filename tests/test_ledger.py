@@ -245,6 +245,33 @@ class LedgerTest(unittest.TestCase):
         self.fetch("/api/daily", {"ids": [advance["id"],rows["closed"]["id"]], "choice":"no"}, status="400 Bad Request")
         self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 63000)
 
+    def test_initial_classification_preserves_manual_edits_and_uncertain_orders(self):
+        from nmoney.trial import first_pass
+        def pay(order, merchant, product):
+            return Transaction("微信", order, "2026-11-15 10:00:00", merchant, product,
+                               "商户消费", "支出", 1200, "支付成功")
+        self.add_trades(pay("a", "甲商户", "套餐"), pay("b", "甲商户", "套餐"), pay("c", "甲商户", "套餐"),
+                        pay("d", "乙商户", "其他"), pay("e", "美团", "团购-美团"))
+        rows = {r["order_id"]: r for r in self.fetch("/api/ledger")["rows"]}
+        for order in ("a", "b"):
+            self.mark(rows[order], "餐饮")
+        def trial(apply):
+            with database(self.path) as conn:
+                return first_pass(conn, "2026-11-01", "2026-11-30", apply)
+        self.assertEqual(trial(False)["yes"], 3)
+        self.assertEqual(self.fetch("/api/ledger")["outflow"]["pending"], 5)
+        trial(True)
+        current = self.fetch("/api/ledger")
+        c = next(r for r in current["rows"] if r["order_id"] == "c")
+        self.assertEqual((c["category"], c["daily_choice"], c["manual_category"]), ("餐饮", "yes", None))
+        self.assertEqual(current["outflow"]["pending"], 2)
+        self.fetch("/api/daily", {"ids": [c["id"]], "choice": None})
+        self.fetch("/api/daily", {"ids": [rows["a"]["id"]], "choice": "no"})
+        trial(True)
+        current = self.fetch("/api/ledger")
+        self.assertEqual(current["groups"]["日常生活"], {"count": 1, "cents": 1200})
+        self.assertEqual(current["outflow"]["pending"], 3)
+
     def test_known_spending_excludes_unknown_over_cap_and_loans(self):
         self.upload("支付宝.csv", alipay([("meal", "餐饮美食", "135.00", "交易成功"),
                                          ("unknown", "其他", "200.00", "交易成功"),
