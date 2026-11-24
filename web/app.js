@@ -186,6 +186,29 @@ function legacyDailyReport(data, staged) {
   }
 }
 
+// 已启动的旧服务没有实付汇总，但逐笔 personal 已扣除退款和关联回款。
+function legacyPaymentReport(data) {
+  const totals = {count: 0, gross: 0, cents: 0, unpriced: 0, unpriced_gross: 0};
+  const months = new Map(data.months);
+  for (const month of months.values()) { month.paid = 0; month.paid_unpriced = 0; }
+  for (const row of data.rows) {
+    row.payment = row.outflow && !["投资理财", "内部划转"].includes(row.category);
+    if (!row.payment) continue;
+    totals.count++;
+    totals.gross += row.cents;
+    const month = months.get(row.time.slice(0, 7));
+    if (row.personal === null) {
+      totals.unpriced++;
+      totals.unpriced_gross += row.cents;
+      month.paid_unpriced++;
+    } else {
+      totals.cents += row.personal;
+      month.paid += row.personal;
+    }
+  }
+  data.payments = totals;
+}
+
 // 正在运行的旧版服务仍会返回细分类。刷新页面即可使用相同的分类口径。
 function mergeLegacyCategories(data) {
   const aliases = new Map([["咖啡", "餐饮"], ["洗衣", "日用"], ["数码", "休闲"]]);
@@ -315,6 +338,7 @@ async function refresh() {
   if (version !== state.request) return;
   $("sync-info").hidden = !data.legacy_daily;
   mergeLegacyCategories(data);
+  if (!data.payments) legacyPaymentReport(data);
   state.ledger = data;
   const selected = $("period").value;
   const options = [new Option("本月", "current"), new Option("全部日期", ""), new Option("自选日期", "custom")];
@@ -356,11 +380,25 @@ function renderClusters() {
 
 function renderOverview(data) {
   const out = data.outflow;
-  $("outflow-total").textContent = money(out.cents);
-  $("outflow-equation").textContent = "平台支出 " + money(out.cents - out.extra_invested) +
-    " ＋ 平台另列的理财买入 " + money(out.extra_invested);
-  $("all-outflows").textContent = "查看全部 " + out.count + " 笔支出 →";
-  $("all-outflows").href = rangedHref(new URLSearchParams({bucket: "全部支出"}));
+  const paid = data.payments;
+  $("outflow-total").textContent = money(paid.cents);
+  let equation = "付款原额 " + money(paid.gross);
+  if (paid.refunds !== undefined) {
+    equation += " − 退款 " + money(paid.refunds) + " − 已关联群收款 " + money(paid.repaid);
+  } else {
+    equation += " − 退款及已关联群收款 " + money(paid.gross - paid.cents - paid.unpriced_gross);
+  }
+  if (paid.unpriced) equation += " − 暂未计入的 " + paid.unpriced + " 笔退款待核对原额 " + money(paid.unpriced_gross);
+  $("outflow-equation").textContent = equation;
+  const scope = ["其中已识别消费 " + money(data.known_spending) + "（含超上限）"];
+  for (const category of ["借出", "代付待回款"]) {
+    const amount = data.rows.reduce((sum, row) => sum + (row.payment && row.category === category ? row.personal ?? 0 : 0), 0);
+    if (amount) scope.push(category + " " + money(amount));
+  }
+  if ($("period").value === "current" && data.rows.length) scope.push("最近一笔 " + data.rows[0].time.slice(0, 10));
+  $("payment-scope").textContent = scope.join(" · ");
+  $("all-outflows").textContent = "查看实付明细（" + paid.count + " 笔） →";
+  $("all-outflows").href = rangedHref(new URLSearchParams({bucket: "实际支付"}));
   $("review-count").textContent = out.pending + " 笔";
   const cards = { "已计入": "included", "日常生活": "daily", "超上限": "over" };
   for (const [key, id] of Object.entries(cards)) {
@@ -394,10 +432,10 @@ function renderOverview(data) {
   ).join("") || '<p class="hint">当前范围内没有收到群收款。</p>';
   renderDrill();
   const periods = data.months.map(([month, values]) => `
-    <tr><td>${escapeHTML(month)}</td><td class="money">${money(values.outflow)}</td>
+    <tr><td>${escapeHTML(month)}</td><td class="money">${money(values.paid)}${values.paid_unpriced ? `<small>${values.paid_unpriced} 笔退款待核对</small>` : ""}</td>
       <td class="money">${money(values.daily)}</td><td class="money">${money(values.invested)}</td></tr>`).join("");
   $("months").innerHTML = periods ? `<div class="table-scroll"><table>
-    <thead><tr><th>月份</th><th class="money">全部支出</th><th class="money">确认日常</th><th class="money">理财买入</th></tr></thead>
+    <thead><tr><th>月份</th><th class="money">实际支付</th><th class="money">确认日常</th><th class="money">理财买入</th></tr></thead>
     <tbody>${periods}</tbody></table></div>` : '<p class="hint">当前范围内没有交易。</p>';
 }
 
@@ -523,7 +561,7 @@ function transactionSearch(input) {
   return row => {
     const text = normalize([row.merchant, row.product, row.category, row.note, row.order_id,
       row.time, row.platform, row.direction, row.bucket, row.status, row.source_category].join(" "));
-    return terms.every(term => term.cents === row.cents || term.cents === row.net ||
+    return terms.every(term => term.cents === row.cents || term.cents === row.net || term.cents === row.personal ||
       (!term.amountOnly && text.includes(term.word)));
   };
 }
@@ -536,6 +574,7 @@ function renderDetails() {
   const gross = bucket === "全部支出" || bucket === "日常待确认" || bucket === "已确认非日常";
   const amount = r => gross ? r.cents : r.outflow ? r.personal || 0 : r.net;
   const matchesBucket = row => {
+    if (bucket === "实际支付") return row.payment;
     if (bucket === "全部支出") return row.outflow;
     if (Object.hasOwn(dailyFilters, bucket)) return row.outflow && row.daily_choice === dailyFilters[bucket];
     return !bucket || row.bucket === bucket;
@@ -551,8 +590,12 @@ function renderDetails() {
   const offset = (state.listPage - 1) * pageSize;
   $("trades").innerHTML = sortedRows(rows, $("detail-sort").value, amount).slice(offset, offset + pageSize).map(r => tradeRow(r, gross)).join("") ||
     '<tr><td colspan="6">没有符合条件的交易。</td></tr>';
-  $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" ?
+  $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "实际支付" ?
     (gross ? " · 原付合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
+  if (bucket === "实际支付") {
+    const unpriced = rows.filter(row => row.personal === null).length;
+    if (unpriced) $("row-count").textContent += " · " + unpriced + " 笔退款待核对，暂未计入";
+  }
   $("pager").hidden = pages <= 1;
   $("previous").disabled = state.listPage === 1;
   $("next").disabled = state.listPage === pages;

@@ -31,8 +31,8 @@
     </section>
     <section id="overview">
       <section class="reconciliation" aria-label="支出对账">
-        <div><h2>全部支出 · 原付金额</h2><strong id="outflow-total">—</strong></div>
-        <div class="reconcile-notes"><p id="outflow-equation"></p><a id="all-outflows" href="#bucket=全部支出">查看每笔支出 →</a></div>
+        <div><h2>实际支付（不含理财）</h2><strong id="outflow-total">—</strong></div>
+        <div class="reconcile-notes"><p id="outflow-equation"></p><p id="payment-scope"></p><a id="all-outflows" href="#bucket=实际支付">查看实付明细 →</a></div>
       </section>
       <div class="cards">
         <button class="card primary clickable" id="open-daily" aria-expanded="false" aria-controls="drill"><h2>日常开销 <span>⌄</span></h2><strong id="daily">—</strong><small id="daily-count"></small></button>
@@ -53,12 +53,12 @@
         <section class="panel"><div class="panel-heading"><h2>理财买入</h2><strong class="money" id="invested"></strong></div><div id="funds"></div></section>
         <section class="panel"><div class="panel-heading"><h2>群收款分摊</h2><span class="hint" id="aa-count"></span></div><div id="aa-list"></div></section>
       </div>
-      <p class="hint">全部支出保留付款原额。日常开销按个人实付汇总，扣除退款和已关联群收款。初分结果可逐笔调整，未能判定的流水可在「日常归属待确认」核对。</p>
+      <p class="hint">实际支付按原付款日期归属。日常开销只汇总已标为日常的个人实付，归属可以逐笔调整。</p>
     </section>
     <section id="details" hidden>
       <div class="detail-filters">
         <label class="search">关键词搜索<input id="search" type="search" placeholder="搜商户、商品、金额或备注，可用空格组合"></label>
-        <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>全部支出</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></optgroup></select></label>
+        <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>实际支付</option><option value="全部支出">原付流水（含理财）</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></optgroup></select></label>
         <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
       </div>
       <details id="merchant-summary" class="panel" hidden>
