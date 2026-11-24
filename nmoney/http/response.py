@@ -15,6 +15,7 @@ class Response:
         return cls(json.dumps(value, ensure_ascii=False).encode(), "application/json", status)
 
     def send(self, start_response):
+        # WSGI 通过回调发送状态和响应头，返回值是字节串序列。长度按编码后的字节数计算。
         start_response(self.status, [
             ("Content-Type", self.mime + "; charset=utf-8"),
             ("Content-Length", str(len(self.body))),

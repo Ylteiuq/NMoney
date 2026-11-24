@@ -5,6 +5,7 @@ from dataclasses import fields
 from ..models.statement import Transaction
 
 
+# Transaction 的前两列 platform、order_id 标识原单，更新快照时只改其余平台字段。
 TRADE_FIELDS = tuple(field.name for field in fields(Transaction))
 RAW_FIELDS = TRADE_FIELDS[2:]
 SNAPSHOT_FIELDS = RAW_FIELDS + ("exported_at",)
@@ -61,6 +62,7 @@ class LedgerRepository:
         return self.conn.execute("SELECT 1 FROM daily_choices WHERE trade_id=?", (trade_id,)).fetchone() is not None
 
     def reset_daily_choice(self, trade_id):
+        """将初分标为 pending 并撤销手动决定，返回这一笔是否发生了变化。"""
         cleared = self.conn.execute("""UPDATE trades SET initial_daily='pending'
                                        WHERE id=? AND initial_daily IS NOT 'pending'""", (trade_id,)).rowcount
         removed = self.conn.execute("DELETE FROM daily_choices WHERE trade_id=?", (trade_id,)).rowcount
@@ -96,6 +98,7 @@ class LedgerRepository:
             "SELECT DISTINCT substr(time,1,7) AS month FROM trades ORDER BY month DESC")]
 
     def trades(self, start, end, platform):
+        """按范围取流水，附上商户规则、日常选择、上限例外和回款所对应的原单。"""
         clauses, params = [], []
         if start:
             clauses.append("t.time >= ?")
@@ -107,6 +110,7 @@ class LedgerRepository:
             clauses.append("t.platform = ?")
             params.append(platform)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        # 手工标注和回款关联都可以缺省。LEFT JOIN 让尚未分类的流水也出现在列表中。
         return self.conn.execute("""
             SELECT t.*, r.category AS merchant_category, x.trade_id IS NOT NULL AS include_over_cap, d.choice AS daily_choice,
                    a.expense_id AS linked_expense_id, e.merchant AS linked_merchant, e.time AS linked_time,

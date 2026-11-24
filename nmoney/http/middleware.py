@@ -16,6 +16,7 @@ def api_middleware(handler):
         try:
             if request.method == "POST" and request.write_header != "1":
                 raise ValueError("请从 NMoney 页面提交。")
+            # 先校验前端写请求头，再从 WSGI 输入流读取正文，交给对应的控制器。
             request.read_input()
             return handler(request)
         except (ValueError, KeyError) as exc:

@@ -9,7 +9,6 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
-
 from ..models.statement import Statement, Transaction
 
 

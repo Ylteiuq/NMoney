@@ -18,6 +18,7 @@ def build_router(controller, web_root):
         ("POST", "/api/cap"): controller.set_cap,
         ("POST", "/api/daily"): controller.mark_daily,
     }
+    # 只给已注册的 API 包这一层。无匹配路由直接返回 404，静态文件也无需读取请求体。
     routes = {route: api_middleware(handler) for route, handler in api.items()}
     routes.update({
         ("GET", "/"): partial(static_file, file=web_root / "index.html", mime="text/html"),

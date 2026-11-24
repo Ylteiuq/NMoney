@@ -49,6 +49,7 @@ def classify(repo, start, end, apply=False):
     rows = [r for r in build_dashboard(repo, start, end)["rows"] if r["outflow"]]
     groups = clustered_rows(rows)
     manual = {r["id"]: r["manual_category"] for r in rows if r["editable"] and r["manual_category"]}
+    # 推断新用途时，排除已有模型预测的交易，避免一个猜测在同组中被当成新的证据。
     anchors = {r["id"]: r["category"] for r in rows if not r["initial_category"] and r["category"] != "未知"}
     stats = Counter(manual_labels=len(manual), outflows=len(rows), clusters=sum(len(g) > 1 for g in groups))
     for group in groups:

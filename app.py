@@ -22,6 +22,8 @@ WEB = Path(__file__).resolve().parent / "web"
 
 
 def application(db_path):
+    """组装一个指向指定账本的应用，测试可以传入临时 SQLite 路径。"""
+    # 这里绑定数据库路径。每次业务调用再打开连接和事务。
     service = LedgerService(partial(repository_session, db_path))
     router = build_router(LedgerController(service), WEB)
     return as_wsgi(local_only(router))

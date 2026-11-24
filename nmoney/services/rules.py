@@ -111,6 +111,7 @@ def evaluate(tx, cap, receipts=()):
     state = payment_state(tx)
     manual = LEGACY_CATEGORIES.get(tx["manual_category"], tx["manual_category"])
     merchant = LEGACY_CATEGORIES.get(tx["merchant_category"], tx["merchant_category"])
+    # 单笔标注优先，再看商户规则和商品描述。模型只补仍然未知的用途。
     category = manual or merchant or guess_category(tx)
     if category == "未知" and not manual and not merchant and tx["initial_category"]:
         category = tx["initial_category"]
@@ -129,6 +130,7 @@ def evaluate(tx, cap, receipts=()):
     else:
         bucket = "已计入"
     outflow = is_outflow(tx)
+    # 用途（如餐饮）和日常归属分别决定。pending 保留用户主动撤回选择的意图。
     initial = tx["initial_daily"]
     manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
     daily_choice = tx["daily_choice"] or (initial if initial in ("yes", "no") else None)

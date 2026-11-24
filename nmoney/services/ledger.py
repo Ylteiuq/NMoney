@@ -123,6 +123,7 @@ class LedgerService:
             if not expense or payment_state(expense) != "支出":
                 raise ValueError("请选择一笔已付款的支出。")
             others = linked_receipts(repo).get(expense_id, ())
+            # 重新关联时，这笔回款可能已指向该原单，校验总额时只算它一次。
             used = sum(r["cents"] for r in others if r["id"] != receipt_id)
             if used + receipt["cents"] > after_refund(expense):
                 raise ValueError("累计回款将超过这笔付款的金额，请核对原付款。")
