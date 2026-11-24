@@ -107,6 +107,15 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual((refunded["note"], refunded["manual_category"]), ("手工备注", "休闲"))
         self.assertEqual(self.fetch("/api/ledger", query={"start":"2026-11-09"})["rows"], [])
 
+    def test_annotation_failure_rolls_back_prior_write(self):
+        self.upload("支付宝.csv", alipay([("meal", "餐饮美食", "120.00", "交易成功")]))
+        before = self.fetch("/api/ledger")
+        payload = {"id": before["rows"][0]["id"], "category": "借出", "note": "修改中的备注",
+                   "rule": "set", "include_over_cap": True}
+        error = self.fetch("/api/annotate", payload, status="400 Bad Request")
+        self.assertEqual(error["error"], "请先选择一项消费用途，再手动计入。")
+        self.assertEqual(self.fetch("/api/ledger"), before)
+
     def test_cap_manual_and_merchant_rule(self):
         self.upload("支付宝.csv", alipay([("a", "其他", "100.00", "交易成功"), ("b", "其他", "100.01", "交易成功"),
                                          ("c", "其他", "7.00", "交易成功")]))

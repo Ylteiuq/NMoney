@@ -1,0 +1,140 @@
+"""账本用例。每个用例在一个 repository session 内完成。"""
+
+from dataclasses import asdict
+from datetime import datetime
+
+from .rules import (
+    CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt, is_outflow,
+    payment_state, summarize,
+)
+
+
+def linked_receipts(repo):
+    """先取所有日期的有效回款，再筛原支出，保留跨月、跨平台分摊。"""
+    by_expense = {}
+    for row in repo.receipt_links():
+        if is_group_receipt(row):
+            by_expense.setdefault(row["expense_id"], []).append(dict(row))
+    return by_expense
+
+
+def build_dashboard(repo, start="", end="", platform=""):
+    cap = repo.cap()
+    receipts = linked_receipts(repo)
+    rows = [evaluate(row, cap, receipts.get(row["id"], [])) for row in repo.trades(start, end, platform)]
+    return dict(cap=cap, rows=rows, choices=CHOICES, available_months=repo.available_months(), **summarize(rows))
+
+
+class LedgerService:
+    """session 提供一次用例共用的 Repository，immediate=True 表示在读取前取得写锁。"""
+
+    def __init__(self, session):
+        self.session = session
+
+    def database_file(self):
+        with self.session() as repo:
+            return repo.database_file()
+
+    def dashboard(self, start="", end="", platform=""):
+        with self.session() as repo:
+            return build_dashboard(repo, start, end, platform)
+
+    def import_statement(self, statement):
+        counts = {"added": 0, "changed": 0, "skipped": 0}
+        with self.session() as repo:
+            for trade in statement.transactions:
+                old = repo.order(trade.platform, trade.order_id)
+                raw = asdict(trade)
+                if old is None:
+                    repo.insert_trade(dict(raw, exported_at=statement.exported_at))
+                    counts["added"] += 1
+                elif statement.exported_at <= old["exported_at"]:
+                    counts["skipped"] += 1
+                else:
+                    # 即使字段不变，也保存较新的导出时间，防止回退到旧快照。
+                    changed = any(old[name] != value for name, value in raw.items())
+                    repo.update_snapshot(dict(raw, exported_at=statement.exported_at))
+                    counts["changed" if changed else "skipped"] += 1
+        return counts
+
+    def set_cap(self, cents):
+        if type(cents) is not int or cents < 0:
+            raise ValueError("上限必须是非负金额。")
+        with self.session() as repo:
+            repo.set_cap(cents)
+
+    def mark_daily(self, ids, choice, pending_only=False, sync_staged=False):
+        if (choice not in ("yes", "no", None) or type(pending_only) is not bool
+                or type(sync_staged) is not bool or (sync_staged and not pending_only)):
+            raise ValueError("请选择计入日常、非日常或待确认。")
+        if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids):
+            raise ValueError("请选择支出流水。")
+        changed = 0
+        with self.session(immediate=True) as repo:
+            for trade_id in set(ids):
+                tx = repo.trade(trade_id)
+                if tx is None or not is_outflow(tx):
+                    raise ValueError("只能标记实际支出的流水。")
+                if pending_only and tx["initial_daily"] in ("yes", "no") and not sync_staged:
+                    continue
+                if sync_staged and tx["initial_daily"] == "pending" and choice is not None:
+                    continue
+                if choice is None:
+                    if pending_only and repo.has_daily_choice(trade_id):
+                        continue
+                    changed += repo.reset_daily_choice(trade_id)
+                elif pending_only:
+                    changed += repo.insert_daily_choice(trade_id, choice)
+                else:
+                    changed += repo.upsert_daily_choice(trade_id, choice)
+        return changed
+
+    def annotate(self, trade_id, category, note="", rule="keep", include_over_cap=None):
+        with self.session() as repo:
+            row = repo.trade(trade_id)
+            if row is None or payment_state(row) != "支出":
+                raise ValueError("只有付款记录可以补用途。")
+            if isinstance(category, str):
+                category = LEGACY_CATEGORIES.get(category, category)
+            if category not in CHOICES:
+                raise ValueError("请选择列表中的用途。")
+            repo.annotate(trade_id, category, note.strip())
+            if include_over_cap is not None:
+                if include_over_cap and category not in SPENDING:
+                    raise ValueError("请先选择一项消费用途，再手动计入。")
+                if include_over_cap:
+                    repo.include_over_cap(trade_id)
+                else:
+                    repo.remove_exception(trade_id)
+            if rule == "remove":
+                repo.remove_merchant_rule(row["platform"], row["merchant"])
+            elif rule == "set" and row["merchant"] not in {"", "/"}:
+                repo.set_merchant_rule(row["platform"], row["merchant"], category)
+
+    def link_receipt(self, receipt_id, expense_id):
+        with self.session(immediate=True) as repo:
+            receipt = repo.trade(receipt_id)
+            if not receipt or not is_group_receipt(receipt):
+                raise ValueError("请选择已到账的群收款。")
+            if expense_id is None:
+                repo.unlink_receipt(receipt_id)
+                return
+            expense = repo.trade(expense_id)
+            if not expense or payment_state(expense) != "支出":
+                raise ValueError("请选择一笔已付款的支出。")
+            others = linked_receipts(repo).get(expense_id, ())
+            used = sum(r["cents"] for r in others if r["id"] != receipt_id)
+            if used + receipt["cents"] > after_refund(expense):
+                raise ValueError("累计回款将超过这笔付款的金额，请核对原付款。")
+            repo.link_receipt(receipt_id, expense_id)
+
+    def receipt_options(self, receipt_id):
+        rows = self.dashboard()["rows"]
+        target = next((r for r in rows if r["id"] == receipt_id and r["group_receipt"]), None)
+        if not target:
+            raise ValueError("找不到这笔群收款。")
+        candidates = [r for r in rows if r["editable"]]
+        when = datetime.fromisoformat(target["time"])
+        candidates.sort(key=lambda r: abs((datetime.fromisoformat(r["time"]) - when).total_seconds()))
+        fields = ("id", "time", "platform", "merchant", "product", "cents")
+        return [{key: r[key] for key in fields} for r in candidates]
