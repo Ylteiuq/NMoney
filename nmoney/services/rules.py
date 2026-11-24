@@ -117,8 +117,11 @@ def evaluate(tx, cap, receipts=()):
         category = tx["initial_category"]
     received = sum(receipt["cents"] for receipt in receipts)
     net = tx["cents"]
+    refund = 0
     if state == "支出":
-        net = max(0, after_refund(tx) - received)
+        remaining = after_refund(tx)
+        refund = tx["cents"] - remaining
+        net = max(0, remaining - received)
     if state != "支出":
         bucket, category = "非消费", state
     elif category in EXCLUSIONS:
@@ -137,11 +140,14 @@ def evaluate(tx, cap, receipts=()):
     personal = net
     if state == "退款待核对":
         personal = None
+        refund = None
     elif state == "已退款":
         personal = 0
+        refund = tx["cents"]
     return dict(tx, manual_category=manual, merchant_category=merchant, category=category,
                 bucket=bucket, net=net, editable=state == "支出",
                 outflow=outflow, personal=personal if outflow else None,
+                payment=outflow and category not in ("投资理财", "内部划转"), refund_cents=refund,
                 manual_daily=manual_daily, daily_choice=daily_choice,
                 daily=outflow and daily_choice == "yes", group_receipt=is_group_receipt(tx),
                 receipts=receipts, received=received, fund=investment_product(tx))
@@ -152,12 +158,26 @@ def summarize(rows):
     categories = defaultdict(int)
     funds = defaultdict(lambda: {"count": 0, "cents": 0})
     months = defaultdict(lambda: {"cents": 0, "count": 0, "pending": 0, "invested": 0,
-                                 "outflow": 0, "daily": 0})
+                                 "outflow": 0, "daily": 0, "paid": 0, "paid_unpriced": 0})
+    payments = {"count": 0, "gross": 0, "cents": 0, "refunds": 0, "repaid": 0, "unpriced": 0, "unpriced_gross": 0}
     outflow = {"count": 0, "cents": 0, "pending": 0, "daily_unpriced": 0, "extra_invested": 0}
     known_over_cap = 0
     deducted_receipts = 0
     for row in rows:
         month = months[row["time"][:7]]
+        if row["payment"]:
+            payments["count"] += 1
+            payments["gross"] += row["cents"]
+            if row["personal"] is None:
+                payments["unpriced"] += 1
+                payments["unpriced_gross"] += row["cents"]
+                month["paid_unpriced"] += 1
+            else:
+                # 先抵退款，再抵已关联回款。重导后退款增加时，两项合计至多抵完原付款。
+                payments["refunds"] += row["refund_cents"]
+                payments["repaid"] += row["cents"] - row["refund_cents"] - row["personal"]
+                payments["cents"] += row["personal"]
+                month["paid"] += row["personal"]
         if row["outflow"]:
             outflow["count"] += 1
             outflow["cents"] += row["cents"]
@@ -193,7 +213,7 @@ def summarize(rows):
             categories[row["category"]] += row["net"]
             month["count"] += 1
             month["cents"] += row["net"]
-    return {"outflow": outflow, "groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
+    return {"outflow": outflow, "payments": payments, "groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
             "known_spending": groups["已计入"]["cents"] + known_over_cap,
             "categories": sorted(categories.items(), key=lambda pair: -pair[1]),
             "funds": sorted(funds.items(), key=lambda pair: -pair[1]["cents"]),

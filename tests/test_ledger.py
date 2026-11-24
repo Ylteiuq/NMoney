@@ -103,6 +103,7 @@ class LedgerTest(unittest.TestCase):
         self.app = application(self.path)  # 重开同一个数据库
         current = self.fetch("/api/ledger")
         self.assertEqual(current["groups"]["已计入"]["cents"], 2900)
+        self.assertEqual((current["payments"]["cents"], current["payments"]["refunds"]), (2900, 2000))
         refunded = next(r for r in current["rows"] if r["category"] == "已退款")
         self.assertEqual((refunded["note"], refunded["manual_category"]), ("手工备注", "休闲"))
         self.assertEqual(self.fetch("/api/ledger", query={"start":"2026-11-09"})["rows"], [])
@@ -169,6 +170,9 @@ class LedgerTest(unittest.TestCase):
         month = self.fetch("/api/ledger", query=november)
         self.assertEqual(month["groups"]["日常生活"]["cents"], 3732)
         self.assertEqual((month["known_spending"], month["deducted_receipts"]), (3732, 7468))
+        self.assertEqual(month["payments"], dict(count=1, gross=11200, cents=3732, refunds=0, repaid=7468,
+                                                 unpriced=0, unpriced_gross=0))
+        self.assertEqual(dict(month["months"])["2026-11"]["paid"], 3732)
         self.assertEqual(len(month["rows"][0]["receipts"]), 2)
         self.fetch("/api/aa", {"receipt_id": ids["C"], "expense_id": ids["meal"]}, status="400 Bad Request")
         candidates = self.fetch("/api/aa-options", query={"receipt_id":ids["A"]})
@@ -188,6 +192,23 @@ class LedgerTest(unittest.TestCase):
         self.fetch("/api/annotate", dict(annotation, include_over_cap=False))
         self.assertEqual(self.fetch("/api/ledger", query=november)["groups"]["已计入"]["count"],0)
 
+    def test_payments_after_later_refund(self):
+        self.upload("支付宝.csv", alipay([("meal", "餐饮美食", "100.00", "交易成功"),
+                                         ("move", "其他", "200.00", "交易成功")]))
+        receipt = Transaction("微信", "aa", "2026-12-01 10:00:00", "同伴", "/", "群收款", "收入", 6000, "已存入零钱")
+        refund = Transaction("支付宝", "refund", "2026-12-02 10:00:00", "甲商户", "退单", "退款", "收入", 7000, "退款成功")
+        ids = self.add_trades(receipt, refund)
+        rows = self.fetch("/api/ledger")["rows"]
+        self.mark(next(r for r in rows if r["order_id"] == "move"), "内部划转")
+        self.fetch("/api/aa", {"receipt_id": ids["aa"], "expense_id": ids["meal"]})
+        self.upload("支付宝.csv", alipay([("meal", "餐饮美食", "100.00", "已退款(￥70.00)")], "2026-12-03 12:00:00"))
+        data = self.fetch("/api/ledger")
+        # 原单后续退款 70 元，只剩 30 元可由回款抵扣。退款入账和其余回款不能再次冲减。
+        self.assertEqual(data["payments"], dict(count=1, gross=10000, cents=0, refunds=7000, repaid=3000,
+                                                unpriced=0, unpriced_gross=0))
+        self.assertEqual([r["order_id"] for r in data["rows"] if r["payment"]], ["meal"])
+        self.assertEqual([m["paid"] for _, m in data["months"]], [0, 0])
+
     def test_funds_and_meituan(self):
         def fund(order, product, status="交易成功"):
             return Transaction("支付宝", order, "2026-11-01 12:00:00", "蚂蚁财富", product, "投资理财",
@@ -203,6 +224,8 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(dict(data["categories"]), {"美团":485,"餐饮":922})
         self.assertEqual(data["groups"]["日常生活"]["cents"],0)
         self.assertEqual(data["outflow"]["cents"],21407)
+        self.assertEqual(data["payments"]["cents"], 1407)
+        self.assertEqual([r["payment"] for r in data["rows"] if r["fund"]], [False, False])
         self.assertEqual(data["groups"]["已计入"]["cents"],1407)
         self.assertEqual(data["known_spending"],1407)
 
@@ -241,6 +264,10 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(choose(["advance", "refunded", "partial", "uncertain"], "yes", pending_only=True)["changed"], 3)
         data = self.fetch("/api/ledger")
         self.assertEqual(data["outflow"], dict(cents=65300, count=4, pending=0, daily_unpriced=1, extra_invested=0))
+        self.assertEqual(data["payments"], dict(count=4, gross=65300, cents=63550, refunds=1250, repaid=0,
+                                                unpriced=1, unpriced_gross=500))
+        month = data["months"][0][1]
+        self.assertEqual((month["paid"], month["paid_unpriced"]), (63550, 1))
         self.assertEqual(data["groups"]["日常生活"], dict(count=3, cents=550))
         choose(["advance"], "yes")
         choose(["partial"], None)
