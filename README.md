@@ -44,17 +44,28 @@ python3 app.py --open
 
 **去重**使用「平台 + 交易订单号」。同一天、同商户、同金额的两笔付款，只要订单号不同，就各算一笔。较新的导出可以更新原始状态。较旧或同批导出跳过。缺少导出时间的文件可以增加新订单，已有订单保留原状。手工备注和分类独立保存。分类优先级为单笔标注、同名商户规则、程序推断。
 
-## 代码从哪里看
+## 后端结构
+
+一次请求从 `app.application(db_path)` 组装的 WSGI 入口进入。Host 校验通过后，Router 按「方法、路径」匹配一次。API 中间件检查写请求头并读取输入，Controller 从 Request 取参数，调用 Service 后返回 Response。
 
 | 文件 | 职责 |
 | --- | --- |
-| `app.py` | 本地服务入口、静态文件与 HTTP 接口 |
+| `app.py` | 加载启动配置，组装 Service、Controller、Router 和中间件，启动本地服务 |
+| `nmoney/http.py` | 封装 Request、Response，连接 WSGI 输入流与响应回调 |
+| `nmoney/middleware.py` | 校验 Host 和写请求头，将既有的参数与业务错误转换为 HTTP 400 |
+| `nmoney/router.py` | 集中注册 8 个 API 和 4 个静态资源，未匹配的方法和路径返回 404 |
+| `nmoney/controllers.py` | 提取查询参数、JSON 字段和导入文件，构建 HTTP 响应 |
+| `nmoney/services.py` | 处理账本查询、快照去重、单笔标注、上限和群收款分摊 |
+| `nmoney/repository.py` | 执行账本的 SQL 查询和写入，返回数据及受影响的行数 |
+| `nmoney/infrastructure.py` | 创建连接、启用外键、管理事务和执行建表迁移 |
 | `nmoney/statements.py` | 读取微信 Excel 和支付宝 CSV，按列名提取交易并保留完整订单号 |
-| `nmoney/ledger.py` | SQLite 建表、重叠导入、分类标注和查询 |
 | `nmoney/rules.py` | 识别资金性质、推断用途、计算上限和月度统计 |
-| `nmoney/trial.py` | 复用浏览器的聚类模型做一次初分，并用已有的手工用途做留一验证 |
+| `nmoney/classification.py` | 运行相似支出初分和留一验证，通过 Repository 保存结果 |
+| `nmoney/trial.py`、`nmoney/ledger.py` | 分别提供初分命令行入口和原有的 Python 连接式调用接口 |
 | `web/` | 概览、明细和导入页面 |
-| `tests/test_ledger.py` | 用虚构账单通过 HTTP 应用入口验证导入、重导、退款与手工修订 |
+| `tests/test_http.py`、`tests/test_ledger.py` | 分别验证 HTTP 协议和通过真实应用入口执行的账本业务 |
+
+例如，`POST /api/aa` 由 Controller 取出回款和原付款 ID。Service 在同一事务内核对付款性质、检查累计回款并决定关联或解除，Repository 执行对应 SQL。分摊和批量日常标记沿用 `BEGIN IMMEDIATE`，先取得写锁再读取。用例成功后统一提交，抛出异常时先回滚，再由中间件构建错误响应。
 
 在项目目录执行测试：
 
