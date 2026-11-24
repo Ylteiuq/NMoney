@@ -10,12 +10,12 @@ from pathlib import Path
 from urllib.request import urlopen
 from wsgiref.simple_server import make_server
 
-from nmoney.controllers import LedgerController
-from nmoney.http import as_wsgi
-from nmoney.infrastructure import DEFAULT_DB, initialize, repository_session
-from nmoney.middleware import local_only
-from nmoney.router import build_router
-from nmoney.services import LedgerService
+from nmoney.controllers.ledger import LedgerController
+from nmoney.http.application import as_wsgi
+from nmoney.infrastructure.database import DEFAULT_DB, initialize, repository_session
+from nmoney.http.middleware import local_only
+from nmoney.http.router import build_router
+from nmoney.services.ledger import LedgerService
 
 
 WEB = Path(__file__).resolve().parent / "web"

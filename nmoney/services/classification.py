@@ -8,7 +8,7 @@ import subprocess
 import unicodedata
 
 from .rules import DAILY, EXCLUSIONS, SPENDING
-from .services import build_dashboard
+from .ledger import build_dashboard
 
 
 NON_DAILY = (set(SPENDING + EXCLUSIONS) - set(DAILY) - {"美团"}) | {"已退款"}
@@ -34,7 +34,7 @@ def neighbor_category(target, group, labels):
 
 def clustered_rows(rows):
     # 与浏览器使用同一模型。只把建模特征送给本机 Node 子进程。
-    model = Path(__file__).resolve().parents[1] / "web" / "app.js"
+    model = Path(__file__).resolve().parents[2] / "web" / "app.js"
     script = """const {clusterOutflows} = require(process.argv[1]);
       const rows = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
       process.stdout.write(JSON.stringify(clusterOutflows(rows).map(g => g.map(r => r.id))));"""

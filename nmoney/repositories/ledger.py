@@ -2,7 +2,7 @@
 
 from dataclasses import fields
 
-from .statements import Transaction
+from ..models.statement import Transaction
 
 
 TRADE_FIELDS = tuple(field.name for field in fields(Transaction))

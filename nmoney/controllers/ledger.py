@@ -1,7 +1,7 @@
 """将 HTTP 参数交给账本服务，并构造前端约定的响应。"""
 
-from .http import Response
-from .statements import parse_statement
+from ..http.response import Response
+from ..infrastructure.statements import parse_statement
 
 
 def static_file(request, *, file, mime):

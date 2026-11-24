@@ -5,8 +5,8 @@ from datetime import date
 import json
 from pathlib import Path
 
-from .classification import classify
-from .infrastructure import DEFAULT_DB, initialize, repository_on, repository_session
+from .services.classification import classify
+from .infrastructure.database import DEFAULT_DB, initialize, repository_on, repository_session
 
 
 def first_pass(conn, start, end, apply=False):

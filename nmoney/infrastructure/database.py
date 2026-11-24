@@ -4,10 +4,10 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from .repository import LedgerRepository
+from ..repositories.ledger import LedgerRepository
 
 
-DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "nmoney.sqlite3"
+DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "nmoney.sqlite3"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY,
