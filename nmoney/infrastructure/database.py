@@ -140,4 +140,7 @@ def repository_on(conn, immediate=False):
 def repository_session(path, immediate=False):
     """一个用例一条连接。正常退出提交，异常回滚，最后关闭连接。"""
     with database(path) as conn:
+        if not immediate:
+            # 并发请求下，概览的多次 SELECT 从同一个快照读取明细与合计。
+            conn.execute("BEGIN")
         yield repository_on(conn, immediate)

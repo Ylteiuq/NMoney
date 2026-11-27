@@ -33,11 +33,13 @@ function post(url, payload) {
 
 // 迁移旧版浏览器留下的手工标记。所有新决定直接写入服务端。
 const dailyKey = row => JSON.stringify([row.platform, row.order_id]);
+const choicePrefix = "NMoney.daily.v1:";
 let storeName;
+let migratingChoices = false;
 async function choiceStore() {
   if (!storeName) {
     const ping = await request("/api/ping");
-    storeName = "NMoney.daily.v1:" + ping.database;
+    storeName = choicePrefix + ping.database;
   }
   return storeName;
 }
@@ -64,6 +66,19 @@ async function syncChoices(key) {
     else localStorage.removeItem(key);
     return known.length > 0;
   });
+}
+
+async function migrateStoredChoices() {
+  if (migratingChoices) return;
+  migratingChoices = true;
+  try {
+    if (!Object.keys(localStorage).some(key => key.startsWith(choicePrefix))) return;
+    if (await syncChoices(await choiceStore())) await refresh();
+  } catch (error) {
+    notice("旧版日常选择尚未同步：" + error.message, true);
+  } finally {
+    migratingChoices = false;
+  }
 }
 
 function navigate(page) {
@@ -169,15 +184,13 @@ async function refresh() {
   const period = $("period").value;
   if (period && period !== "custom") query.set("budget_month", query.get("start").slice(0, 7));
   const url = "/api/ledger?" + query;
-  let data = await request(url);
+  const data = await request(url);
   if (version !== state.request) return;
   if (!Array.isArray(data.daily_categories)) {
     $(state.page).hidden = true;
     throw new Error("正在运行旧版后端。请重启 NMoney 服务后刷新，读取更新后的账本。");
   }
   $(state.page).hidden = false;
-  if (await syncChoices(await choiceStore())) data = await request(url);
-  if (version !== state.request) return;
   state.ledger = data;
   const selected = $("period").value;
   const now = new Date();
@@ -194,6 +207,8 @@ async function refresh() {
   if (state.page === "clusters") renderClusters();
   if ($("trade-sheet").open) renderTradeDetails();
   if ($("overview-sheet").open && !$("fund-orders").hidden) renderFundOrders();
+  // 先显示 SQLite 已返回的账本。只有旧浏览器留有暂存标记时才核对数据库路径。
+  void migrateStoredChoices();
 }
 
 function renderClusters() {

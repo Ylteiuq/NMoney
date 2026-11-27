@@ -15,6 +15,7 @@ from nmoney.http.application import as_wsgi
 from nmoney.infrastructure.database import DEFAULT_DB, initialize, repository_session
 from nmoney.http.middleware import local_only
 from nmoney.http.router import build_router
+from nmoney.http.server import LocalWSGIServer
 from nmoney.services.ledger import LedgerService
 from nmoney.services.classification import classify
 
@@ -39,7 +40,7 @@ def main():
     initialize(args.db)
     url = f"http://127.0.0.1:{args.port}"
     try:
-        server = make_server("127.0.0.1", args.port, application(args.db))
+        server = make_server("127.0.0.1", args.port, application(args.db), server_class=LocalWSGIServer)
     except OSError as exc:
         if exc.errno != errno.EADDRINUSE:
             raise

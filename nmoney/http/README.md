@@ -4,6 +4,7 @@
 
 | 文件 | 读代码时关注什么 |
 | --- | --- |
+| [server.py](server.py) | 每条本机连接交给单独的线程。浏览器预先建立一条空闲连接时，其他标签页仍可请求页面和 API。 |
 | [application.py](application.py) | `as_wsgi` 把 `environ` 包为 `Request`，调用处理函数，再用 `Response.send` 把结果交回服务器。 |
 | [request.py](request.py) | 从 WSGI 字段取方法、路径和请求头。`read_input` 按 `CONTENT_LENGTH` 的字节数读正文，重复查询参数取第一个解析出的值。`json()` 供控制器解析 JSON 正文。 |
 | [middleware.py](middleware.py) | `local_only` 检查 Host。`api_middleware` 检查 API 写请求头，读取输入，把输入及业务校验抛出的 `ValueError`、`KeyError` 转成带 `error` 字段的 JSON。 |
