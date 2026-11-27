@@ -230,26 +230,20 @@ function renderBudget(budget) {
     $("budget").dataset.month = budget.month;
   }
   $("budget-period").textContent = budget.month + " · 全平台";
-  $("budget-title").textContent = "月度可用余额";
-  const settled = budget.remaining !== null;
-  const left = settled ? budget.remaining : budget.cash_left;
-  $("budget-left").textContent = (left < 0 ? "−" : "") + money(Math.abs(left));
-  $("budget-status").textContent = !settled ? "按现金算 · 借款口径待选" : budget.unpriced ? "暂计 · 有退款待核" :
-    (left < 0 ? "已超出月度额度" : "额度内") + (budget.total ? " · 已用 " + Math.max(0, Math.round((budget.total-left)/budget.total*100)) + "%" : "");
+  const left = budget.remaining ?? budget.spending_left;
+  $("budget-title").textContent = left < 0 ? "本月已超支" : "本月还能花";
+  $("budget-left").textContent = money(Math.abs(left));
+  $("budget-status").textContent = budget.unpriced ? budget.unpriced + " 笔退款待核，金额暂计" : "";
   $("budget").classList.toggle("over", left < 0);
   const used = budget.total - left;
   $("budget-meter").style.width = (budget.total ? Math.min(100, Math.max(0, used / budget.total * 100)) : used > 0 ? 100 : 0) + "%";
-  const terms = ["生活费 " + money(budget.base), "额外收入 " + money(budget.manual + budget.extra), "占用额度的支付 " + money(budget.spent)];
+  $("budget-equation").textContent = "本月收入 " + money(budget.total) +
+    (used < 0 ? " ＋ 净回款 " : " − 已用生活费 ") + money(Math.abs(used));
   $("budget-medical").hidden = !budget.medical;
   $("budget-medical").textContent = "医疗另计 " + money(budget.medical || 0) + " ›";
   $("budget-medical").href = "#" + new URLSearchParams({period: budget.month, bucket: "医疗单列"});
-  if (budget.lent) terms.push("其中借出 " + money(budget.lent));
-  if (budget.returned) terms.push("归还借款 " + money(budget.returned));
-  if (!settled) terms.push("剔除借款往来后剩 " + money(budget.spending_left));
-  if (budget.unpriced) terms.push(budget.unpriced + " 笔退款实付待核，余额为暂计");
-  $("budget-equation").textContent = terms.join(" · ");
   $("base-amount").value = budget.base / 100;
-  $("budget-lending").value = budget.lending ?? "";
+  $("budget-lending").value = budget.lending ?? 0;
   $("supplements").innerHTML = budget.supplements.map(s => '<div class="income-item"><div>' +
     escapeHTML(s.label) + " · " + money(s.cents) + (s.trade_id ? " · 已匹配流水" : "") +
     '</div><button class="row-action" data-remove-income="' + escapeHTML(s.id) + '">撤销补记</button></div>').join("");
@@ -269,9 +263,14 @@ function renderBudget(budget) {
     const label = document.createElement("div");
     label.textContent = income.merchant + " · " + money(income.cents);
     const info = document.createElement("small");
-    info.textContent = [income.time.slice(5,10), income.platform, income.product !== "/" && income.product,
+    info.textContent = [income.time, income.platform, income.product !== "/" && income.product,
       income.status === "waiting" ? "待到账" : "已到账"].filter(Boolean).join(" · ");
     label.append(info);
+    const original = document.createElement("a");
+    original.textContent = "查看原始流水";
+    original.href = "#" + new URLSearchParams({page: "details", period: budget.month, platform: income.platform,
+      q: income.order_id || income.time});
+    label.append(original);
     const kinds = {extra:"计入额外收入", base:"已含在生活费", ignore:"不计额度", pending:"待核对", repayment:"归还借款"};
     const select = document.createElement("select");
     select.setAttribute("aria-label", income.merchant + " 收入归属");

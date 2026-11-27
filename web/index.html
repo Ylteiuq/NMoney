@@ -52,13 +52,14 @@
     <p id="notice" role="status" hidden></p>
     <section id="overview">
       <section class="panel budget" id="budget" hidden aria-labelledby="budget-title">
-        <div class="panel-heading"><h2 id="budget-title">本月可用余额</h2><span class="hint" id="budget-period"></span></div>
+        <div class="panel-heading"><h2 id="budget-title">本月还能花</h2><span class="hint" id="budget-period"></span></div>
         <div class="budget-line"><strong id="budget-left"></strong><span id="budget-status"></span></div>
         <div class="budget-track" aria-hidden="true"><i id="budget-meter"></i></div>
-        <p class="hint"><span id="budget-equation"></span> <a id="budget-medical" hidden></a></p>
-        <details id="budget-manage"><summary>收入与额度管理</summary>
+        <p class="hint"><span id="budget-equation"></span></p>
+        <details id="budget-manage"><summary>查看收入明细与预算设置</summary>
+          <a id="budget-medical" hidden></a>
           <form id="base-form" class="budget-form"><label>本月基础生活费（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
-          <label class="loan-control">借款对各月余额的影响<select id="budget-lending"><option value="" disabled>请选择口径</option><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
+          <label class="loan-control">借款对各月余额的影响<select id="budget-lending"><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
           <h3>手工补记收入</h3><div id="supplements"></div>
           <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="quiet">添加收入</button></form>
           <h3>账单转入</h3><div id="budget-incomes"></div>
@@ -66,6 +67,7 @@
         </details>
       </section>
       <section class="statement" aria-label="支出对账">
+        <details class="payment-audit"><summary>查看支付流水对账</summary>
         <div class="balance">
           <div><h2>实际支付 <small>不含理财</small></h2>
             <strong id="outflow-total">—</strong>
@@ -74,6 +76,7 @@
           <dl id="outflow-equation" aria-label="实付金额计算"></dl>
         </div>
         <p id="payment-scope"></p>
+        </details>
         <div class="metrics">
           <button id="open-daily" aria-expanded="false" aria-controls="drill"><span>日常开销 ›</span><strong id="daily">—</strong><small id="daily-count"></small></button>
           <button id="open-included" aria-expanded="false" aria-controls="drill"><span>已计入消费 ›</span><strong id="included">—</strong><small id="included-count"></small></button>

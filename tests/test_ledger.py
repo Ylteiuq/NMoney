@@ -337,8 +337,9 @@ class LedgerTest(unittest.TestCase):
             return self.fetch("/api/ledger", query=query)["budget"]
         report = budget()
         self.assertEqual((report["total"], report["spent"], report["lent"]), (270000, 110800, 47800))
-        self.assertEqual((report["remaining"], report["cash_left"], report["spending_left"]), (None,159200,207000))
+        self.assertEqual((report["remaining"], report["cash_left"], report["spending_left"]), (207000,159200,207000))
         self.assertEqual(len(report["incomes"]),4)
+        self.assertEqual({r["order_id"] for r in report["incomes"]}, {"base","wages","sale","unknown"})
         manual = {"month":"2026-11", "id":"bank", "label":"银行卡劳务", "cents":70000}
         for _ in range(2):
             self.fetch("/api/budget/supplement", manual)

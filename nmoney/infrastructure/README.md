@@ -83,7 +83,7 @@
 | monthly_allowances | month, cents | 自然月和当月基础生活费（分）。没有设置的月份使用 2,000 元。 |
 | income_supplements | id, month, label, cents | 补记编号、到账月份、来源说明和到账金额（分）。相同编号可安全重试。 |
 | income_choices | trade_id, kind, supplement_id | 平台流水号、人工指定的额度归属和对应补记编号。每条补记最多关联一条转入。删除补记时对应的匹配会一并解除。 |
-| settings | budget_lending 对应的 value | 1 表示借出占额度、还款补回，0 表示两者均排除。尚未选定时同时列出两种余额。 |
+| settings | budget_lending 对应的 value | 1 表示借出占额度、还款补回，0 表示两者均排除。尚未选定时按 0 计算生活费预算。 |
 
 
 ### 借款核对

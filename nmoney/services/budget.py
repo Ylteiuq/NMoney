@@ -68,17 +68,15 @@ def budget_report(repo, month, rows, loans):
         if status == "settled" and kind == "repayment":
             # 旧账本可能只有“还款”标记，没有本金关联，继续沿用其原到账金额。
             returned += row["repayment_cents"] if row["repayment_loan"] else row["cents"]
-        incomes.append({k: row[k] for k in ("id", "time", "platform", "merchant", "product", "cents", "supplement_id", "repayment_loan", "repayment_cents")} |
+        incomes.append({k: row[k] for k in ("id", "time", "platform", "merchant", "product", "order_id", "cents", "supplement_id", "repayment_loan", "repayment_cents")} |
                        {"kind": kind, "choice": row["income_choice"] or "auto", "status": status})
     total = base + manual + extra
     lending = repo.budget_lending()
+    # 默认采用生活费口径。借款本金挂账，只有确认放弃收回的差额占用预算。
+    lending = 0 if lending is None else lending
     cash_left = total + returned - spent
     spending_left = total - spent + lent - loan_loss
-    remaining = None
-    if lending == 1 or cash_left == spending_left:
-        remaining = cash_left
-    elif lending == 0:
-        remaining = spending_left
+    remaining = cash_left if lending else spending_left
     visible_loans = [loan for loan in loans.values() if loan["time"][:7] <= month and
                      (not loan["closed"] or loan["time"][:7] == month or
                       any(r["time"][:7] == month for r in loan["repayments"]))]
