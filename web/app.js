@@ -8,13 +8,15 @@ const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[c]);
 const state = { ledger: null, page: "overview", editId: null, listPage: 1, request: 0, drill: null,
-  receiptId: null, category: "", merchant: null };
+  receiptId: null, category: "", merchant: null, tradeId: null, tradeBasis: "net", fund: null };
 const pageSize = 40;
 
 function notice(message, error = false) {
-  $("notice").textContent = message;
-  $("notice").hidden = !message;
-  $("notice").classList.toggle("error", error);
+  const output = document.querySelector("#trade-sheet[open] .sheet-notice") ||
+    document.querySelector("#overview-sheet[open] .sheet-notice") || $("notice");
+  output.textContent = message;
+  output.hidden = !message;
+  output.classList.toggle("error", error);
 }
 
 async function request(url, options) {
@@ -190,6 +192,8 @@ async function refresh() {
   renderOverview(data);
   renderDetails();
   if (state.page === "clusters") renderClusters();
+  if ($("trade-sheet").open) renderTradeDetails();
+  if ($("overview-sheet").open && !$("fund-orders").hidden) renderFundOrders();
 }
 
 function renderClusters() {
@@ -231,6 +235,7 @@ function renderBudget(budget) {
   }
   const [year, month] = budget.month.split("-");
   $("budget-period").textContent = year + " 年 " + Number(month) + " 月 · 全平台";
+  $("sheet-income").textContent = money(budget.total);
   const left = budget.remaining;
   $("budget-title").textContent = left < 0 ? "本月日常预算已超支" : "本月日常还能花";
   $("budget-left").textContent = money(Math.abs(left));
@@ -288,14 +293,25 @@ function renderBudget(budget) {
     if (income.status === "settled" || income.repayment_loan) {
       for (const loan of loans) {
         if (loan.id === income.repayment_loan || (!loan.closed && loan.outstanding && loan.time <= income.time)) {
-          select.add(new Option("归还 " + loan.time.slice(5,10) + " 借给 " + loan.merchant + " 的 " + money(loan.principal), "loan:" + loan.id));
+          select.add(new Option("归还 " + loan.time.slice(5,10) + " · " + money(loan.principal) + " · " + loan.merchant, "loan:" + loan.id));
         }
       }
     }
     if (income.choice === "repayment" && !income.repayment_loan) select.add(new Option("归还借款（未关联）","repayment"));
     if (income.repayment_loan && income.cents > income.repayment_cents) info.textContent += " · 未抵本金 " + money(income.cents - income.repayment_cents);
     select.value = income.repayment_loan ? "loan:" + income.repayment_loan : income.choice === "matched" ? "matched:" + income.supplement_id : income.choice;
-    item.append(label, select);
+    const control = document.createElement("label");
+    control.className = "income-kind";
+    control.append("收入归属", select);
+    if (income.repayment_loan) {
+      const loan = loans.find(item => item.id === income.repayment_loan);
+      if (loan) {
+        const match = document.createElement("small");
+        match.textContent = "已关联 " + loan.time.slice(0,10) + " 借给 " + loan.merchant + " 的 " + money(loan.principal);
+        label.append(match);
+      }
+    }
+    item.append(label, control);
     items.push(item);
   }
   $("budget-incomes").replaceChildren(...items);
@@ -349,18 +365,10 @@ function renderOverview(data) {
   $("recent-list").innerHTML = data.rows.slice(0, 5).map(row => tradeRow(row)).join("") || '<p class="hint">当前范围没有交易。</p>';
   $("recent-all").href = rangedHref(new URLSearchParams({page: "details"}));
   $("invested").textContent = money(data.invested);
-  const purchases = new Map();
-  for (const row of data.rows) {
-    if (!row.fund) continue;
-    if (!purchases.has(row.fund)) purchases.set(row.fund, []);
-    purchases.get(row.fund).push(row);
-  }
   $("funds").innerHTML = data.funds.length ? `<table>
     <thead><tr><th>产品</th><th>笔数</th><th class="money">买入金额</th></tr></thead><tbody>${
-      data.funds.map(([name, fund]) => `<tr><td><details><summary>${escapeHTML(name)}</summary><ul class="fund-orders">${
-        purchases.get(name).map(r => `<li>${escapeHTML(r.time.slice(0, 10))} · ${money(r.cents)}
-          <small>${escapeHTML(r.status)}</small></li>`).join("")}</ul></details></td><td>${fund.count}</td>
-        <td class="money">${money(fund.cents)}</td></tr>`).join("")}</tbody></table>` :
+      data.funds.map(([name, fund]) => `<tr><td><button class="fund-link" data-fund="${escapeHTML(name)}" aria-haspopup="dialog">${escapeHTML(name)} ›</button></td>
+        <td>${fund.count}</td><td class="money">${money(fund.cents)}</td></tr>`).join("")}</tbody></table>` :
     '<div class="empty-state compact"><svg class="icon" aria-hidden="true"><use href="#icon-trend"/></svg><p>当前范围内没有理财买入。</p></div>';
   const receipts = data.rows.filter((row) => row.group_receipt);
   const pendingReceipts = receipts.filter((row) => !row.linked_expense_id).length;
@@ -427,25 +435,75 @@ function sortedRows(rows, mode, amount = row => row.net) {
   });
 }
 
-function toggleDrill(kind) {
-  state.drill = state.drill === kind ? null : kind;
+// 列表在保存分类后会重新渲染，关闭面板时按流水找到原来的入口。
+const sheetOrigins = new WeakMap();
+
+function openSheet(dialog, trigger) {
+  if (!dialog.open) {
+    sheetOrigins.set(dialog, {trigger, container: trigger.closest("[id]"), hash: location.hash});
+    dialog.showModal();
+  }
+  dialog.querySelector(".sheet-notice").hidden = true;
+  dialog.querySelector(".sheet-scroll").scrollTop = 0;
+  dialog.querySelector("[data-dismiss]").focus({preventScroll: true});
+}
+
+function restoreSheetFocus(dialog) {
+  const origin = sheetOrigins.get(dialog);
+  if (!origin || origin.hash !== location.hash || dialog.open) return;
+  let target = origin.trigger;
+  if (!target.isConnected) {
+    const key = target.hasAttribute("data-trade") ? "trade" : "fund";
+    target = [...origin.container.querySelectorAll(`[data-${key}]`)].find(el => el.dataset[key] === origin.trigger.dataset[key]);
+  }
+  const fallback = document.querySelector("#overview-sheet[open] [data-dismiss]") || $("title");
+  (target || fallback).focus({preventScroll: true});
+}
+
+function overviewSheet(section, title, trigger) {
+  for (const panel of $("sheet-scroll").children) panel.hidden = panel.id !== section;
+  $("sheet-title").textContent = title;
+  const period = $("period");
+  const range = period.value === "custom" ? [$("start").value || "最早", $("end").value || "今天"].join(" 至 ") :
+    period.selectedOptions[0].textContent;
+  $("sheet-range").textContent = section === "budget-manage" ? $("budget-period").textContent : range + " · " + ($("platform").value || "全平台");
+  openSheet($("overview-sheet"), trigger);
+}
+
+function budgetTab(tab) {
+  for (const item of tab.parentElement.children) {
+    const active = item === tab;
+    item.setAttribute("aria-selected", String(active));
+    item.tabIndex = active ? 0 : -1;
+    $(item.getAttribute("aria-controls")).hidden = !active;
+  }
+  $("sheet-scroll").scrollTop = 0;
+}
+
+function openDrill(kind, trigger) {
+  state.drill = kind;
   $("drill-category").value = "";
+  $("back-audit").hidden = kind !== "included";
+  overviewSheet("drill", kind === "daily" ? "日常开支明细" : "已计入消费明细", trigger);
   renderDrill();
 }
 
+function renderFundOrders() {
+  const fund = state.ledger.funds.find(([name]) => name === state.fund);
+  const rows = state.ledger.rows.filter(row => row.fund === state.fund);
+  $("fund-name").textContent = state.fund;
+  $("fund-total").textContent = money(fund ? fund[1].cents : 0);
+  $("fund-list").innerHTML = rows.map(row => tradeRow(row, {gross: true})).join("");
+}
+
 function renderDrill(selectedCategory = $("drill-category").value) {
-  $("drill").hidden = !state.drill;
-  for (const kind of ["included", "daily"]) {
-    $("open-" + kind).setAttribute("aria-expanded", String(state.drill === kind));
-  }
-  if (!state.drill || !state.ledger) return;
+  if (!state.drill || $("drill").hidden || !$("overview-sheet").open) return;
   const daily = state.drill === "daily";
   const rows = state.ledger.rows.filter((r) => daily ? r.daily : r.bucket === "已计入");
   const category = r => daily ? (r.daily_category || r.category) : r.category;
   const names = new Set(rows.map(category));
   $("drill-category").replaceChildren(new Option("全部用途", ""), ...Array.from(names).sort().map(n => new Option(n, n)));
   $("drill-category").value = names.has(selectedCategory) ? selectedCategory : "";
-  $("drill-title").textContent = daily ? "日常开销明细" : "已计入消费明细";
   $("drill-chart-title").textContent = daily ? "日常开支构成" : "已计入消费构成";
   $("daily-bars").innerHTML = daily ? categoryBars(state.ledger.daily_categories, "已确认日常", true) :
     categoryBars(state.ledger.categories, "已计入", true);
@@ -456,27 +514,38 @@ function renderDrill(selectedCategory = $("drill-category").value) {
     '<p class="hint">当前范围没有符合条件的消费。</p>';
 }
 
-function tradeRow(row, {gross = false, dailyView = false, columns = false} = {}) {
-  const info = [["交易对方", merchantLabel(row)]];
+function displayedAmount(row, basis) {
+  const net = row.outflow ? row.personal : row.net;
+  const amount = basis === "daily" ? row.daily_cents ?? net : basis === "gross" ? row.cents : net;
+  const incoming = row.direction === "收入" && row.income_status !== "waiting";
+  const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
+  return {net, incoming, text: amount === null ? "退款待核对" : sign + money(amount)};
+}
+
+function renderTradeDetails() {
+  const row = state.ledger.rows.find(item => item.id === state.tradeId);
+  if (!row) { $("trade-sheet").close(); return; }
+  const info = [];
   if (row.product && row.product !== "/") info.push(["商品说明", row.product]);
   info.push(["交易时间", row.time], ["支付平台", row.platform], ["收支类型", row.direction],
-    ["交易状态", row.status], ["用途", row.category], ["统计状态", row.bucket], ["订单号", row.order_id], ["原始金额", money(row.cents)]);
+    ["交易状态", row.status], ["订单号", row.order_id], ["原始金额", money(row.cents)]);
+  const ledger = [["用途", row.category], ["统计状态", row.bucket]];
   if (row.outflow) info.push(["个人实付", row.personal === null ? "退款待核对" : money(row.personal)]);
   if (row.loan) {
-    info.push(["已还本金", money(row.loan.repaid)], ["待还本金", money(row.loan.outstanding)]);
-    if (row.loan.closed) info.push(["结清差额计日常", money(row.loan.daily_loss)]);
+    ledger.push(["已还本金", money(row.loan.repaid)], ["待还本金", money(row.loan.outstanding)]);
+    if (row.loan.closed) ledger.push(["结清差额计日常", money(row.loan.daily_loss)]);
   }
-  if (row.note) info.push(["备注", row.note]);
-  if (row.outflow) info.push(["日常归属", row.daily_choice === "yes" ? "日常" : row.daily_choice === "no" ? "非日常" : "待确认"],
+  if (row.note) ledger.push(["备注", row.note]);
+  if (row.outflow) ledger.push(["日常归属", row.daily_choice === "yes" ? "日常" : row.daily_choice === "no" ? "非日常" : "待确认"],
     ["判断来源", row.daily_lock || (row.manual_daily ? "手动选择" : row.over_daily_cap ? "超过单笔上限，默认非日常" : row.daily_source === "peers" ? "同商户同类商品的人工标记一致" : row.daily_source === "conflict" ? "人工标记有分歧" : row.daily_choice ? "自动初分" : "证据不足")]);
-  for (const receipt of row.receipts) info.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
-  if (row.over_daily_cap && row.daily && !row.daily_lock) info.push(["上限例外", "已手动计入"]);
-  if (row.group_receipt && row.linked_expense_id) info.push(["关联付款", row.linked_merchant]);
+  for (const receipt of row.receipts) ledger.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
+  if (row.over_daily_cap && row.daily && !row.daily_lock) ledger.push(["上限例外", "已手动计入"]);
+  if (row.group_receipt && row.linked_expense_id) ledger.push(["关联付款", row.linked_merchant]);
   let edit = "";
   if (row.editable) {
-    edit = `<button class="row-action" data-edit="${row.id}">编辑用途</button>`;
+    edit = `<button class="quiet" data-edit="${row.id}">编辑用途</button>`;
   } else if (row.group_receipt) {
-    edit = `<button class="row-action" data-receipt="${row.id}">关联付款</button>`;
+    edit = `<button class="quiet" data-receipt="${row.id}">关联付款</button>`;
   }
   if (row.outflow && !row.daily_lock) {
     const choices = [["", "待确认"], ["yes", "计入日常"], ["no", "非日常"]];
@@ -484,25 +553,38 @@ function tradeRow(row, {gross = false, dailyView = false, columns = false} = {})
       ([value, label]) => `<option value="${value}"${value === (row.daily_choice || "") ? " selected" : ""}>${label}</option>`
     ).join("")}</select>`;
   }
-  const net = row.outflow ? row.personal : row.net;
-  const amount = dailyView ? (row.daily_cents ?? net) : gross ? row.cents : net;
+  const shown = displayedAmount(row, state.tradeBasis);
+  const basisLabel = state.tradeBasis === "gross" ? "账单原额" : state.tradeBasis === "daily" ? "计入日常" :
+    row.outflow ? "个人实付" : row.direction === "收入" ? (row.income_status === "waiting" ? "待到账金额" : "收入金额") : "流水金额";
+  const body = $("trade-content");
+  const focusKey = body.contains(document.activeElement) ? document.activeElement.dataset : null;
+  const facts = entries => `<dl class="sheet-facts">${entries.map(([label,value]) =>
+    `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join("")}</dl>`;
+  body.innerHTML = `<div class="amount-block receipt-head"><h3>${escapeHTML(merchantLabel(row))}</h3>
+    <strong class="${shown.incoming ? "income" : ""}">${shown.text}</strong><small>${basisLabel}</small></div>
+    <section class="receipt-section"><h3>账本归属</h3>${facts(ledger)}${edit ? `<div class="bill-actions">${edit}</div>` : ""}</section>
+    <section class="receipt-section"><h3>交易信息</h3>${facts(info)}</section>`;
+  if (focusKey) {
+    const selector = focusKey.daily ? "[data-daily]" : focusKey.edit ? "[data-edit]" : "[data-receipt]";
+    body.querySelector(selector)?.focus({preventScroll: true});
+  }
+}
+
+function tradeRow(row, {gross = false, dailyView = false, columns = false} = {}) {
+  const basis = dailyView ? "daily" : gross ? "gross" : "net";
+  const {net, incoming, text} = displayedAmount(row, basis);
   const waiting = row.income_status === "waiting";
-  const incoming = row.direction === "收入" && !waiting;
-  const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
   const badge = ({"餐饮":"meal", "校园消费":"meal", "日用":"bag", "美团":"bag", "医疗":"health",
     "交通":"transit", "休闲":"ticket", "投资理财":"trend", "收入":"transfer", "内部划转":"transfer"})[row.category] || "wallet";
   const product = row.product && row.product !== "/" ? row.product : row.category;
   const platform = escapeHTML(row.platform);
   const time = escapeHTML(row.time.slice(5, 16));
-  return `<details class="bill">
-    <summary><span class="bill-icon bill-${badge}" aria-hidden="true"><svg class="icon"><use href="#icon-${badge}"/></svg></span>
+  return `<button type="button" class="bill" data-trade="${row.id}" data-basis="${basis}" aria-haspopup="dialog"><span class="bill-icon bill-${badge}" aria-hidden="true"><svg class="icon"><use href="#icon-${badge}"/></svg></span>
       <span class="bill-text"><strong>${escapeHTML(merchantLabel(row))}</strong><small>${waiting ? "待到账 · " : ""}<span class="inline-context">${platform} · </span>${escapeHTML(product)}<span class="inline-context"> · ${time}</span></small></span>
       ${columns ? `<span class="bill-platform">${platform}<small>${time}</small></span>` : ""}
-      <span class="bill-amount${incoming ? " income" : ""}">${amount === null ? "退款待核对" : sign + money(amount)}${net !== row.cents ?
+      <span class="bill-amount${incoming ? " income" : ""}">${text}${net !== row.cents ?
         `<small>${gross ? (net === null ? "退款待核对" : "实付 " + money(net)) : "原付 " + money(row.cents)}</small>` : ""}</span>
-      <span class="arrow" aria-hidden="true">›</span></summary>
-    <div class="bill-detail"><dl>${info.map(([label,value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join("")}</dl>
-    ${edit ? `<div class="bill-actions">${edit}</div>` : ""}</div></details>`;
+      <span class="arrow" aria-hidden="true">›</span></button>`;
 }
 
 function merchantLabel(row) {
@@ -627,6 +709,16 @@ async function openReceipt(id) {
 }
 
 async function rowAction(event) {
+  const trade = event.target.closest("[data-trade]");
+  if (trade) {
+    state.tradeId = Number(trade.dataset.trade);
+    state.tradeBasis = trade.dataset.basis;
+    renderTradeDetails();
+    const parentSheet = trade.closest("dialog");
+    $("trade-sheet").querySelector("[data-dismiss]").setAttribute("aria-label", parentSheet ? "返回" + $("sheet-title").textContent : "关闭交易详情");
+    openSheet($("trade-sheet"), trade);
+    return;
+  }
   const edit = event.target.closest("[data-edit]");
   if (edit) return openEditor(Number(edit.dataset.edit));
   const receipt = event.target.closest("[data-receipt]");
@@ -712,6 +804,7 @@ function bindLedger() {
     location.hash = tab.dataset.page === "clusters" ? rangedHref(new URLSearchParams({page: "clusters"})) : tab.dataset.page;
   };
   window.addEventListener("hashchange", () => {
+    for (const dialog of [...document.querySelectorAll("dialog[open]")].reverse()) dialog.close();
     Promise.resolve().then(applyRoute).catch(error => notice(error.message, true));
     $("title").focus();
     window.scrollTo(0, 0);
@@ -769,6 +862,16 @@ function bindLedger() {
     try { await post("/api/budget/income", {id: Number(select.dataset.incomeId), kind: kind === "loan" ? "repayment" : kind, loan_id: kind === "loan" ? Number(id) : null, supplement_id: id}); }
     finally { await refresh(); }
   });
+  const capControl = $("cap-control");
+  document.addEventListener("pointerdown", e => {
+    if (capControl.open && !capControl.contains(e.target)) capControl.open = false;
+  });
+  capControl.addEventListener("keydown", e => {
+    if (e.key === "Escape" && capControl.open) {
+      capControl.open = false;
+      capControl.querySelector("summary").focus();
+    }
+  });
   on("cap-form", "submit", async () => {
     await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
     await refresh();
@@ -786,9 +889,39 @@ function bindLedger() {
   legend.addEventListener("focusout", event => {
     previewCategory(legend.contains(event.relatedTarget) ? event.relatedTarget.closest(".category-row") : null);
   });
-  on("open-included", "click", () => toggleDrill("included"));
-  on("open-daily", "click", () => toggleDrill("daily"));
-  on("fold-drill", "click", () => toggleDrill(state.drill));
+  on("open-budget", "click", e => {
+    budgetTab($("tab-income"));
+    overviewSheet("budget-manage", "收入明细与预算设置", e.currentTarget);
+  });
+  on("open-audit", "click", e => overviewSheet("payment-audit", "支付流水对账", e.currentTarget));
+  on("back-audit", "click", e => {
+    overviewSheet("payment-audit", "支付流水对账", e.currentTarget);
+    $("open-included").focus();
+  });
+  on("open-included", "click", e => openDrill("included", e.currentTarget));
+  on("open-daily", "click", e => openDrill("daily", e.currentTarget));
+  on("funds", "click", e => {
+    const trigger = e.target.closest("[data-fund]");
+    if (!trigger) return;
+    state.fund = trigger.dataset.fund;
+    renderFundOrders();
+    overviewSheet("fund-orders", "理财买入明细", trigger);
+  });
+  const tabs = [...document.querySelectorAll(".sheet-tabs [role=tab]")];
+  for (const [i, tab] of tabs.entries()) {
+    tab.onclick = () => budgetTab(tab);
+    tab.onkeydown = e => {
+      const next = {ArrowRight: (i+1) % tabs.length, ArrowLeft: (i+tabs.length-1) % tabs.length, Home: 0, End: tabs.length-1}[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      budgetTab(tabs[next]);
+      tabs[next].focus();
+    };
+  }
+  for (const dialog of document.querySelectorAll("dialog.sheet")) {
+    dialog.querySelector("[data-dismiss]").onclick = () => dialog.close();
+    dialog.addEventListener("close", () => restoreSheetFocus(dialog));
+  }
   on("drill-sort", "change", () => renderDrill());
   on("drill-category", "change", () => renderDrill());
   on("detail-sort", "change", () => { state.listPage = 1; renderDetails(); });
@@ -819,7 +952,7 @@ function bindLedger() {
   });
   on("previous", "click", () => { state.listPage--; renderDetails(); });
   on("next", "click", () => { state.listPage++; renderDetails(); });
-  for (const id of ["trades", "drill-trades", "aa-list", "cluster-list", "recent-list"]) on(id, "click", rowAction);
+  for (const id of ["trades", "trade-content", "fund-list", "drill-trades", "aa-list", "cluster-list", "recent-list"]) on(id, "click", rowAction);
   on("cluster-list", "click", async event => {
     const button = event.target.closest("[data-group]");
     if (!button) return;
@@ -867,7 +1000,7 @@ function bindLedger() {
   on("close", "click", () => $("editor").close());
   on("dialog-close", "click", () => $("editor").close());
   on("aa-dialog-close", "click", () => $("aa-editor").close());
-  for (const id of ["editor", "aa-editor"]) {
+  for (const id of ["editor", "aa-editor", "overview-sheet", "trade-sheet"]) {
     $(id).addEventListener("click", event => {
       if (event.target !== $(id)) return;
       const bounds = $(id).getBoundingClientRect();

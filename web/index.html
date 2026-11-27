@@ -59,23 +59,12 @@
             <p id="budget-equation"></p>
             <div class="budget-progress"><div class="budget-track" aria-hidden="true"><i id="budget-meter"></i></div><span id="budget-usage"></span></div>
           </div>
-          <details id="budget-manage"><summary class="disclosure">收入明细与预算设置<svg class="icon" aria-hidden="true"><use href="#icon-chevron"/></svg></summary>
-            <a id="budget-medical" hidden></a>
-            <form id="base-form" class="budget-form"><label>本月基础生活费（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
-            <h3>手工补记收入</h3><div id="supplements"></div>
-            <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="quiet">添加收入</button></form>
-            <h3>账单转入</h3><div id="budget-incomes"></div>
-            <h3>借出与还款</h3><div id="budget-loans"></div>
-            <details><summary>其他付款与借款对账</summary>
-              <p>扣除医疗以外的付款后，按下方借款设置计算的余额为 <strong id="reconciliation-left"></strong>。</p>
-              <label class="loan-control">对账时如何处理借款<select id="budget-lending"><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
-            </details>
-          </details>
+          <button type="button" class="disclosure" id="open-budget" aria-haspopup="dialog" aria-controls="overview-sheet">收入明细与预算设置<span class="arrow" aria-hidden="true">›</span></button>
         </section>
         <section class="statement" aria-label="支出对账">
           <h2>账单核对</h2>
           <div class="account-actions">
-            <button id="open-daily" aria-expanded="false" aria-controls="drill">
+            <button id="open-daily" aria-haspopup="dialog" aria-controls="overview-sheet">
               <svg class="icon" aria-hidden="true"><use href="#icon-wallet"/></svg>
               <span>日常开支 <small id="daily-count"></small></span><strong id="daily">—</strong><span class="arrow" aria-hidden="true">›</span>
             </button>
@@ -84,30 +73,9 @@
               <span>日常归属待确认</span><strong id="review-count">—</strong><span class="arrow" aria-hidden="true">›</span>
             </button>
           </div>
-          <details class="payment-audit"><summary class="disclosure">查看支付流水对账<svg class="icon" aria-hidden="true"><use href="#icon-chevron"/></svg></summary>
-            <div class="balance">
-              <div><h2>实际支付 <small>不含理财</small></h2>
-                <strong id="outflow-total">—</strong>
-                <div class="balance-links"><a id="all-outflows" href="#bucket=实际支付">实付明细 ›</a><span id="coverage"></span></div>
-              </div>
-              <dl id="outflow-equation" aria-label="实付金额计算"></dl>
-            </div>
-            <p id="payment-scope"></p>
-            <div class="metrics">
-              <button id="open-included" aria-expanded="false" aria-controls="drill"><span>已计入消费 ›</span><strong id="included">—</strong><small id="included-count"></small></button>
-              <button id="open-over"><span>超上限 ›</span><strong id="over">—</strong><small id="over-count"></small></button>
-            </div>
-            <button id="open-pending" class="text-link">查看用途待分类的付款 ›</button>
-          </details>
+          <button type="button" class="disclosure" id="open-audit" aria-haspopup="dialog" aria-controls="overview-sheet">查看支付流水对账<span class="arrow" aria-hidden="true">›</span></button>
         </section>
       </div>
-      <section id="drill" class="panel drill" hidden>
-        <div class="panel-heading"><div><h2 id="drill-title"></h2></div><button id="fold-drill" class="quiet">收起<svg class="icon" aria-hidden="true"><use href="#icon-chevron"/></svg></button></div>
-        <div id="daily-chart"><h3 id="drill-chart-title">日常开支构成</h3><div id="daily-bars"></div></div>
-        <div class="detail-filters drill-filters"><label>排序<select id="drill-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
-        <label>用途<select id="drill-category"></select></label><output id="drill-total"></output></div>
-        <div id="drill-trades" class="bill-list drill-scroll"></div>
-      </section>
 
       <div class="panels">
         <section class="panel category-panel"><div class="panel-heading"><h2>日常开支构成</h2><span class="hint" id="category-platform"></span></div>
@@ -155,6 +123,71 @@
       </section>
     </section>
   </main>
+
+  <dialog class="sheet" id="overview-sheet" aria-labelledby="sheet-title">
+    <header class="sheet-heading"><div><h2 id="sheet-title"></h2><small id="sheet-range"></small></div>
+      <button type="button" class="icon-button" data-dismiss aria-label="关闭面板" autofocus><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </header>
+    <div class="sheet-scroll" id="sheet-scroll">
+      <section id="budget-manage" hidden>
+        <div class="sheet-tabs" role="tablist" aria-label="预算设置">
+          <button type="button" role="tab" id="tab-income" aria-controls="pane-income" aria-selected="true" tabindex="0">生活费与收入</button>
+          <button type="button" role="tab" id="tab-transfers" aria-controls="pane-transfers" aria-selected="false" tabindex="-1">账单转入</button>
+          <button type="button" role="tab" id="tab-loans" aria-controls="pane-loans" aria-selected="false" tabindex="-1">借款与对账</button>
+        </div>
+        <section id="pane-income" role="tabpanel" aria-labelledby="tab-income">
+          <div class="amount-block"><span>本月收入</span><strong id="sheet-income"></strong></div>
+          <section class="sheet-section"><h3>基础生活费</h3>
+            <form id="base-form" class="budget-form"><label>本月额度（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
+          </section>
+          <section class="sheet-section"><h3>手工补记收入</h3><div id="supplements"></div>
+            <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="action">添加收入</button></form>
+          </section>
+        </section>
+        <section id="pane-transfers" role="tabpanel" aria-labelledby="tab-transfers" hidden>
+          <h3 class="sr-only">账单转入</h3><div id="budget-incomes"></div>
+        </section>
+        <section id="pane-loans" role="tabpanel" aria-labelledby="tab-loans" hidden>
+          <section class="sheet-section"><h3>借出与还款</h3><div id="budget-loans"></div></section>
+          <section class="sheet-section"><h3>其他付款对账</h3><a id="budget-medical" hidden></a>
+            <label class="loan-control">借款本金处理<select id="budget-lending"><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
+            <dl class="sheet-facts"><div><dt>扣除医疗以外付款后的余额</dt><dd id="reconciliation-left"></dd></div></dl>
+          </section>
+        </section>
+      </section>
+      <section id="payment-audit" class="payment-audit" hidden>
+        <div class="balance">
+          <div><h2>实际支付 <small>不含理财</small></h2>
+            <strong id="outflow-total">—</strong>
+            <div class="balance-links"><a id="all-outflows" href="#bucket=实际支付">实付明细 ›</a><span id="coverage"></span></div>
+          </div>
+          <dl id="outflow-equation" aria-label="实付金额计算"></dl>
+        </div>
+        <p id="payment-scope"></p>
+        <div class="metrics">
+          <button id="open-included" aria-controls="drill"><span>已计入消费 ›</span><strong id="included">—</strong><small id="included-count"></small></button>
+          <button id="open-over"><span>超上限 ›</span><strong id="over">—</strong><small id="over-count"></small></button>
+        </div>
+        <button id="open-pending" class="text-link">查看用途待分类的付款 ›</button>
+      </section>
+      <section id="drill" hidden>
+        <button type="button" class="text-link" id="back-audit" hidden>‹ 返回支付流水对账</button>
+        <details class="sheet-disclosure"><summary id="drill-chart-title">分类构成</summary><div id="daily-bars"></div></details>
+        <div class="detail-filters drill-filters"><label>排序<select id="drill-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
+        <label>用途<select id="drill-category"></select></label><output id="drill-total"></output></div>
+        <div id="drill-trades" class="bill-list"></div>
+      </section>
+      <section id="fund-orders" hidden><div class="amount-block"><span id="fund-name"></span><strong id="fund-total"></strong></div><div id="fund-list" class="bill-list"></div></section>
+    </div>
+    <p class="sheet-notice" role="status" hidden></p>
+  </dialog>
+  <dialog class="sheet" id="trade-sheet" aria-labelledby="trade-sheet-title">
+    <header class="sheet-heading"><h2 id="trade-sheet-title">交易详情</h2>
+      <button type="button" class="icon-button" data-dismiss aria-label="关闭面板" autofocus><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </header>
+    <div class="sheet-scroll" id="trade-content"></div>
+    <p class="sheet-notice" role="status" hidden></p>
+  </dialog>
 
   <dialog id="editor"><form id="edit-form">
     <div class="dialog-heading"><div><h2>编辑交易用途</h2></div><button type="button" id="dialog-close" class="icon-button" aria-label="关闭编辑窗口"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><p id="trade-label"></p>
