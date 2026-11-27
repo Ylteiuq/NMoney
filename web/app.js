@@ -162,12 +162,6 @@ function mergeLegacyCategories(data) {
 }
 
 function navigate(page) {
-  const content = {
-    overview: ["FINANCIAL OVERVIEW", "把零散的花销，整理成生活的答案。"],
-    details: ["TRANSACTION LEDGER", "每一笔收支，都有迹可循。"],
-    clusters: ["SMART GROUPING", "发现相似支出，让日常整理更轻松。"],
-    imports: ["IMPORT STATEMENTS", "把账单带进来，其余的交给 NMoney。"]
-  };
   state.page = page;
   for (const tab of document.querySelectorAll("nav button")) {
     const active = tab.dataset.page === page;
@@ -179,11 +173,9 @@ function navigate(page) {
       tab.removeAttribute("aria-current");
     }
   }
-  const [eyebrow, description] = content[page] || content.overview;
-  $("page-eyebrow").textContent = eyebrow;
-  $("page-description").textContent = description;
   $("filters").hidden = page === "imports";
-  $("cap-form").hidden = page === "clusters";
+  $("cap-control").hidden = page === "clusters";
+  $("cap-control").open = false;
   notice("");
 }
 
@@ -231,7 +223,6 @@ function applyRoute() {
   if (state.category) {
     navigate("details");
     $("title").textContent = state.category + "明细";
-    $("page-description").textContent = "逐笔核对这一用途下的消费。";
   } else {
     const detail = hash === "details" || params.get("page") === "details" || params.has("bucket") || params.has("q");
     const page = hash === "clusters" || params.get("page") === "clusters" ? "clusters" : "overview";
@@ -284,7 +275,9 @@ async function refresh() {
   if (!data.payments) legacyPaymentReport(data);
   state.ledger = data;
   const selected = $("period").value;
-  const options = [new Option("本月", "current"), new Option("全部日期", ""), new Option("自选日期", "custom")];
+  const now = new Date();
+  const currentMonth = now.getFullYear() + "年" + (now.getMonth() + 1) + "月（本月）";
+  const options = [new Option(currentMonth, "current"), new Option("全部日期", ""), new Option("自选日期", "custom")];
   for (const month of data.available_months) options.push(new Option(month, month));
   if (!options.some(o => o.value === selected)) options.push(new Option(selected, selected));
   $("period").replaceChildren(...options);
@@ -317,8 +310,7 @@ function renderClusters() {
       <summary><strong>${escapeHTML(title)}</strong><span>${rows.length} 笔 · 原付 ${money(total)} · ${pending} 笔待确认</span></summary>
       ${idx >= 0 && pending ? `<div class="cluster-actions"><button class="quiet" data-group="${idx}" data-choice="yes">将待确认的 ${pending} 笔计入日常</button>
       <button class="quiet" data-group="${idx}" data-choice="no">将这 ${pending} 笔标为非日常</button></div>` : ""}
-      <div class="table-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th>
-      <th>用途统计</th><th class="money">原付金额</th><th>操作 / 日常归属</th></tr></thead><tbody>${items}</tbody></table></div>
+      <div class="bill-list">${items}</div>
     </details>`;
   };
   const singleRows = groups.filter(rows => rows.length === 1).flat();
@@ -330,22 +322,23 @@ function renderOverview(data) {
   const out = data.outflow;
   const paid = data.payments;
   $("outflow-total").textContent = money(paid.cents);
-  let equation = "付款原额 " + money(paid.gross);
+  const adjustments = [["付款原额", money(paid.gross)]];
   if (paid.refunds !== undefined) {
-    equation += " − 退款 " + money(paid.refunds) + " − 已关联群收款 " + money(paid.repaid);
+    adjustments.push(["已退款", "− " + money(paid.refunds)], ["已关联群收款", "− " + money(paid.repaid)]);
   } else {
-    equation += " − 退款及已关联群收款 " + money(paid.gross - paid.cents - paid.unpriced_gross);
+    adjustments.push(["退款及群收款", "− " + money(paid.gross - paid.cents - paid.unpriced_gross)]);
   }
-  if (paid.unpriced) equation += " − 暂未计入的 " + paid.unpriced + " 笔退款待核对原额 " + money(paid.unpriced_gross);
-  $("outflow-equation").textContent = equation;
+  if (paid.unpriced) adjustments.push([paid.unpriced + " 笔退款待核对（暂不计入）", "− " + money(paid.unpriced_gross)]);
+  $("outflow-equation").innerHTML = adjustments.map(([label, amount]) =>
+    `<div><dt>${label}</dt><dd>${amount}</dd></div>`).join("");
   const scope = ["其中已识别消费 " + money(data.known_spending) + "（含超上限）"];
   for (const category of ["借出", "代付待回款"]) {
     const amount = data.rows.reduce((sum, row) => sum + (row.payment && row.category === category ? row.personal ?? 0 : 0), 0);
     if (amount) scope.push(category + " " + money(amount));
   }
-  if ($("period").value === "current" && data.rows.length) scope.push("最近一笔 " + data.rows[0].time.slice(0, 10));
+  $("coverage").textContent = data.rows.length ? "最近一笔 " + data.rows[0].time.slice(0, 10) : "";
   $("payment-scope").textContent = scope.join(" · ");
-  $("all-outflows").textContent = "查看实付明细（" + paid.count + " 笔） →";
+  $("all-outflows").textContent = "查看 " + paid.count + " 笔实付 ›";
   $("all-outflows").href = rangedHref(new URLSearchParams({bucket: "实际支付"}));
   $("review-count").textContent = out.pending + " 笔";
   const cards = { "已计入": "included", "日常生活": "daily", "超上限": "over" };
@@ -353,10 +346,23 @@ function renderOverview(data) {
     const group = data.groups[key];
     $(id).textContent = money(group.cents);
     $(id + "-count").textContent = group.count + " 笔" + (id === "daily" && out.daily_unpriced ?
-      " · " + out.daily_unpriced + " 笔退款待核对" : " · 查看明细");
+      " · " + out.daily_unpriced + " 笔退款待核对" : "");
   }
-  $("categories").innerHTML = data.categories.length ? bars(data.categories) :
-    '<div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#icon-pie"/></svg><strong>还没有消费构成</strong><p>导入账单并补充用途后，这里会呈现消费分布。</p></div>';
+  const total = data.groups["已计入"].cents;
+  let offset = 0;
+  const stops = data.categories.map(([name, cents]) => {
+    const start = offset;
+    offset += total ? cents / total * 100 : 0;
+    return `${categoryColor(name)} ${start}% ${offset}%`;
+  });
+  const ring = $("category-ring");
+  if (!total) ring.style.background = "var(--line)";
+  else if (stops.length === 1) ring.style.background = categoryColor(data.categories[0][0]);
+  else ring.style.background = `conic-gradient(${stops.join(", ")})`;
+  $("ring-total").textContent = money(total);
+  $("categories").innerHTML = bars(data.categories);
+  $("recent-list").innerHTML = data.rows.slice(0, 5).map(row => tradeRow(row)).join("") || '<p class="hint">当前范围没有交易。</p>';
+  $("recent-all").href = rangedHref(new URLSearchParams({page: "details"}));
   $("invested").textContent = money(data.invested);
   const purchases = new Map();
   for (const row of data.rows) {
@@ -389,17 +395,25 @@ function renderOverview(data) {
     <tbody>${periods}</tbody></table></div>` : '<p class="hint">当前范围内没有交易。</p>';
 }
 
-// 同一份分类汇总绘制概览和日常生活的条形图，标签始终显示精确到分的金额。
+const categoryColors = {
+  "餐饮": "#1973eb", "校园消费": "#52a9f6", "日用": "#33a5a4", "美团": "#efb24e",
+  "医疗": "#8371c4", "交通": "#5185ac", "休闲": "#db8768", "会员订阅": "#9d78a5",
+  "人情": "#bd8f55", "其他消费": "#70889a"
+};
+
+function categoryColor(name) {
+  return categoryColors[name] || "#7b8b9c";
+}
+
 function bars(categories, bucket = "已计入") {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
   return categories.map(([name, value]) => `
-    <a class="bar-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}" title="查看${escapeHTML(name)}明细">
-      <span>${escapeHTML(name)}</span>
-      <span class="track"><span class="bar" style="width:${total ? 100 * value / total : 0}%"></span></span>
-      <span class="share">${total ? (100 * value / total).toFixed(1) : "0.0"}%</span>
-      <span class="money">${money(value)}</span>
-      <span class="bar-arrow" aria-hidden="true">›</span>
-    </a>`).join("") || '<p class="hint">当前范围内没有符合条件的消费。</p>';
+    <a class="category-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}">
+      <i style="background:${categoryColor(name)}" aria-hidden="true"></i><span>${escapeHTML(name)}</span>
+      <small>${total ? (100 * value / total).toFixed(1) : "0.0"}%</small>
+      <strong>${money(value)}</strong><span class="arrow" aria-hidden="true">›</span>
+      ${bucket === "已确认日常" ? `<span class="daily-track" aria-hidden="true"><i style="width:${total ? 100 * value / total : 0}%;background:${categoryColor(name)}"></i></span>` : ""}
+    </a>`).join("") || '<p class="hint">当前范围没有已计入消费。</p>';
 }
 
 function sortedRows(rows, mode, amount = row => row.net) {
@@ -439,19 +453,20 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   const amount = r => daily ? r.personal || 0 : r.net;
   $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + amount(r), 0));
   $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r)).join("") ||
-    '<tr class="empty-row"><td colspan="6">当前范围内没有符合条件的消费。</td></tr>';
+    '<p class="hint">当前范围没有符合条件的消费。</p>';
 }
 
 function tradeRow(row, gross = false) {
-  const tagClass = { "待分类": "pending", "已计入": "included" }[row.bucket] || "";
-  const info = [row.platform, row.direction, row.status, "订单号 " + row.order_id];
-  if (row.note) info.push("备注 " + row.note);
-  if (row.daily_choice && row.initial_daily && !row.manual_daily) info.push("日常归属来自本次初分，可手动调整");
-  for (const receipt of row.receipts) {
-    info.push("群收款 " + receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents));
-  }
-  if (row.include_over_cap) info.push("已手动允许超上限计入");
-  if (row.group_receipt && row.linked_expense_id) info.push("已关联 " + row.linked_merchant);
+  const info = [["交易对方", merchantLabel(row)]];
+  if (row.product && row.product !== "/") info.push(["商品说明", row.product]);
+  info.push(["交易时间", row.time], ["支付平台", row.platform], ["收支类型", row.direction],
+    ["交易状态", row.status], ["用途", row.category], ["统计状态", row.bucket], ["订单号", row.order_id], ["原始金额", money(row.cents)]);
+  if (row.outflow) info.push(["个人实付", row.personal === null ? "退款待核对" : money(row.personal)]);
+  if (row.note) info.push(["备注", row.note]);
+  if (row.daily_choice && row.initial_daily && !row.manual_daily) info.push(["日常归属来源", "模型初分"]);
+  for (const receipt of row.receipts) info.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
+  if (row.include_over_cap) info.push(["上限例外", "已手动计入"]);
+  if (row.group_receipt && row.linked_expense_id) info.push(["关联付款", row.linked_merchant]);
   let edit = "";
   if (row.editable) {
     edit = `<button class="row-action" data-edit="${row.id}">${row.bucket === "超上限" ? "手动计入…" : "编辑"}</button>`;
@@ -465,17 +480,20 @@ function tradeRow(row, gross = false) {
     ).join("")}</select>`;
   }
   const net = row.outflow ? row.personal : row.net;
-  const personal = net === null ? "退款待核对" : money(net);
-  return `<tr>
-    <td data-label="交易时间"><time>${escapeHTML(row.time.slice(0, 10))}</time>
-      <small>${escapeHTML(row.platform)} · ${escapeHTML(row.time.slice(11))}</small></td>
-    <td data-label="交易对方 / 商品"><details><summary>${escapeHTML(row.merchant)}</summary>
-      <small>${info.map(escapeHTML).join("<br>")}</small></details><small>${escapeHTML(row.product)}</small></td>
-    <td data-label="用途">${escapeHTML(row.category)}</td>
-    <td data-label="统计状态"><span class="tag ${tagClass}">${escapeHTML(row.bucket)}</span></td>
-    <td class="money" data-label="${gross ? "原付金额" : "金额 / 实付"}">${gross ? money(row.cents) : personal}${net !== row.cents ?
-      `<small>${gross ? "实付 " + personal : "原付 " + money(row.cents)}</small>` : ""}</td><td data-label="操作 / 日常归属">${edit}</td>
-  </tr>`;
+  const amount = gross ? row.cents : net;
+  const incoming = row.direction === "收入";
+  const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
+  const badge = ({"餐饮":"meal", "校园消费":"meal", "日用":"bag", "美团":"bag", "医疗":"health",
+    "交通":"transit", "休闲":"ticket", "投资理财":"trend", "收入":"transfer", "内部划转":"transfer"})[row.category] || "wallet";
+  const description = [row.platform, row.product && row.product !== "/" ? row.product : row.category, row.time.slice(5, 16)].join(" · ");
+  return `<details class="bill">
+    <summary><span class="bill-icon bill-${badge}" aria-hidden="true"><svg class="icon"><use href="#icon-${badge}"/></svg></span>
+      <span class="bill-text"><strong>${escapeHTML(merchantLabel(row))}</strong><small>${escapeHTML(description)}</small></span>
+      <span class="bill-amount${incoming ? " income" : ""}">${amount === null ? "退款待核对" : sign + money(amount)}${net !== row.cents ?
+        `<small>${gross ? (net === null ? "退款待核对" : "实付 " + money(net)) : "原付 " + money(row.cents)}</small>` : ""}</span>
+      <span class="arrow" aria-hidden="true">›</span></summary>
+    <div class="bill-detail"><dl>${info.map(([label,value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join("")}</dl>
+    ${edit ? `<div class="bill-actions">${edit}</div>` : ""}</div></details>`;
 }
 
 function merchantLabel(row) {
@@ -538,8 +556,15 @@ function renderDetails() {
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   state.listPage = Math.min(state.listPage, pages);
   const offset = (state.listPage - 1) * pageSize;
-  $("trades").innerHTML = sortedRows(rows, $("detail-sort").value, amount).slice(offset, offset + pageSize).map(r => tradeRow(r, gross)).join("") ||
-    '<tr class="empty-row"><td colspan="6">没有符合条件的交易。</td></tr>';
+  const sort = $("detail-sort").value;
+  let previousDay = "";
+  $("trades").innerHTML = sortedRows(rows, sort, amount).slice(offset, offset + pageSize).map(row => {
+    const day = row.time.slice(0, 10);
+    const heading = (sort === "recent" || sort === "oldest") && day !== previousDay
+      ? `<h3 class="bill-date">${escapeHTML(day)}</h3>` : "";
+    previousDay = day;
+    return heading + tradeRow(row, gross);
+  }).join("") || '<p class="hint">没有符合条件的交易。</p>';
   $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "实际支付" ?
     (gross ? " · 原付合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
   if (bucket === "实际支付") {
@@ -591,12 +616,12 @@ async function rowAction(event) {
 
 function updateFileSelection() {
   const files = Array.from($("files").files);
-  $("file-label").textContent = files.length ? "已选择 " + files.length + " 份账单" : "点击选择账单文件";
-  $("file-hint").textContent = files.length ? "如需更换，可点击重新选择" : "微信 XLSX 或支付宝 CSV · 支持多选";
+  $("file-label").textContent = files.length ? "已选择 " + files.length + " 份账单" : "选择账单文件";
+  $("file-hint").textContent = files.length ? "点击可重新选择" : "或将文件拖到这里";
   $("selected-files").hidden = !files.length;
   $("selected-files").innerHTML = files.map(file => `<span>${escapeHTML(file.name)}<small>${file.size < 1024 * 1024 ?
     (file.size / 1024).toFixed(1) + " KB" : (file.size / 1024 / 1024).toFixed(1) + " MB"}</small></span>`).join("");
-  $("upload").querySelector("span").textContent = files.length ? "导入 " + files.length + " 份账单" : "导入所选文件";
+  $("upload").textContent = files.length ? "导入 " + files.length + " 份账单" : "导入所选文件";
 }
 
 async function importFiles() {
@@ -655,6 +680,7 @@ function bindLedger() {
   on("cap-form", "submit", async () => {
     await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
     await refresh();
+    $("cap-control").open = false;
     notice("已保存上限，合计已重新计算。");
   });
   on("open-included", "click", () => toggleDrill("included"));
@@ -690,7 +716,7 @@ function bindLedger() {
   });
   on("previous", "click", () => { state.listPage--; renderDetails(); });
   on("next", "click", () => { state.listPage++; renderDetails(); });
-  for (const id of ["trades", "drill-trades", "aa-list", "cluster-list"]) on(id, "click", rowAction);
+  for (const id of ["trades", "drill-trades", "aa-list", "cluster-list", "recent-list"]) on(id, "click", rowAction);
   on("cluster-list", "click", async event => {
     const button = event.target.closest("[data-group]");
     if (!button) return;
