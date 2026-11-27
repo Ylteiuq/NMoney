@@ -24,6 +24,41 @@ class LedgerRepository:
     def set_cap(self, cents):
         self.conn.execute("UPDATE settings SET value=? WHERE name='cap'", (cents,))
 
+    def budget_lending(self):
+        row = self.conn.execute("SELECT value FROM settings WHERE name='budget_lending'").fetchone()
+        return row["value"] if row else None
+
+    def set_budget_lending(self, value):
+        self.conn.execute("INSERT INTO settings VALUES ('budget_lending', ?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
+                          (value,))
+
+    def allowance(self, month):
+        row = self.conn.execute("SELECT cents FROM monthly_allowances WHERE month=?", (month,)).fetchone()
+        return row["cents"] if row else None
+
+    def set_allowance(self, month, cents):
+        self.conn.execute("INSERT INTO monthly_allowances VALUES (?,?) ON CONFLICT(month) DO UPDATE SET cents=excluded.cents",
+                          (month, cents))
+
+    def supplements(self, month):
+        return [dict(row) for row in self.conn.execute("""
+            SELECT s.*, c.trade_id FROM income_supplements s LEFT JOIN income_choices c ON c.supplement_id=s.id
+            WHERE s.month=? ORDER BY s.rowid""", (month,))]
+
+    def add_supplement(self, key, month, label, cents):
+        self.conn.execute("INSERT OR IGNORE INTO income_supplements VALUES (?,?,?,?)", (key, month, label, cents))
+
+    def remove_supplement(self, key, month):
+        self.conn.execute("DELETE FROM income_supplements WHERE id=? AND month=?", (key, month))
+
+    def set_income_choice(self, trade_id, kind, supplement_id):
+        if kind == "auto":
+            self.conn.execute("DELETE FROM income_choices WHERE trade_id=?", (trade_id,))
+        else:
+            self.conn.execute("""INSERT INTO income_choices VALUES (?,?,?) ON CONFLICT(trade_id)
+                              DO UPDATE SET kind=excluded.kind, supplement_id=excluded.supplement_id""",
+                              (trade_id, kind, supplement_id))
+
     def trade(self, trade_id):
         return self.conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
 
@@ -77,7 +112,7 @@ class LedgerRepository:
                                  (trade_id, choice)).rowcount
 
     def set_initial_classification(self, trade_id, choice, category):
-        self.conn.execute("UPDATE trades SET initial_daily=?, initial_category=COALESCE(?,initial_category) WHERE id=?",
+        self.conn.execute("UPDATE trades SET initial_daily=?, initial_category=? WHERE id=?",
                           (choice, category, trade_id))
 
     def receipt_links(self):
@@ -95,7 +130,8 @@ class LedgerRepository:
 
     def available_months(self):
         return [r[0] for r in self.conn.execute(
-            "SELECT DISTINCT substr(time,1,7) AS month FROM trades ORDER BY month DESC")]
+            """SELECT substr(time,1,7) AS month FROM trades UNION SELECT month FROM monthly_allowances
+               UNION SELECT month FROM income_supplements ORDER BY month DESC""")]
 
     def trades(self, start, end, platform):
         """按范围取流水，附上商户规则、日常选择、上限例外和回款所对应的原单。"""
@@ -114,11 +150,12 @@ class LedgerRepository:
         return self.conn.execute("""
             SELECT t.*, r.category AS merchant_category, x.trade_id IS NOT NULL AS include_over_cap, d.choice AS daily_choice,
                    a.expense_id AS linked_expense_id, e.merchant AS linked_merchant, e.time AS linked_time,
-                   e.status AS linked_status
+                   e.status AS linked_status, ic.kind AS income_choice, ic.supplement_id
             FROM trades t LEFT JOIN merchant_rules r
                 ON t.merchant=r.merchant AND t.platform=r.platform
             LEFT JOIN included_exceptions x ON x.trade_id=t.id
             LEFT JOIN daily_choices d ON d.trade_id=t.id
+            LEFT JOIN income_choices ic ON ic.trade_id=t.id
             LEFT JOIN aa_links a ON a.receipt_id=t.id
             LEFT JOIN trades e ON e.id=a.expense_id
         """ + where + " ORDER BY t.time DESC, t.id DESC", params).fetchall()

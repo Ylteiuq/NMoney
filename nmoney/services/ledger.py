@@ -1,7 +1,12 @@
 """账本用例。每个用例在一个 repository session 内完成。"""
 
+from calendar import monthrange
 from dataclasses import asdict
 from datetime import datetime
+from shutil import which
+
+from .budget import budget_report, income_status, validate_month
+from .classification import classify
 
 from .rules import (
     CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt, is_outflow,
@@ -22,6 +27,8 @@ def build_dashboard(repo, start="", end="", platform=""):
     cap = repo.cap()
     receipts = linked_receipts(repo)
     rows = [evaluate(row, cap, receipts.get(row["id"], [])) for row in repo.trades(start, end, platform)]
+    for row in rows:
+        row["income_status"] = income_status(row)
     return dict(cap=cap, rows=rows, choices=CHOICES, available_months=repo.available_months(), **summarize(rows))
 
 
@@ -35,13 +42,57 @@ class LedgerService:
         with self.session() as repo:
             return repo.database_file()
 
-    def dashboard(self, start="", end="", platform=""):
+    def dashboard(self, start="", end="", platform="", budget_month=""):
         with self.session() as repo:
-            return build_dashboard(repo, start, end, platform)
+            data = build_dashboard(repo, start, end, platform)
+            if budget_month:
+                validate_month(budget_month)
+                year, month = map(int, budget_month.split("-"))
+                first, last = budget_month + "-01", f"{budget_month}-{monthrange(year, month)[1]}"
+                rows = data["rows"] if (start, end, platform) == (first, last, "") else build_dashboard(repo, first, last)["rows"]
+                data["budget"] = budget_report(repo, budget_month, rows)
+            return data
+
+    def set_allowance(self, month, cents):
+        validate_month(month)
+        if type(cents) is not int or cents < 0:
+            raise ValueError("生活费须为非负金额。")
+        with self.session() as repo:
+            repo.set_allowance(month, cents)
+
+    def set_budget_lending(self, value):
+        if type(value) is not int or value not in (0, 1):
+            raise ValueError("请选择借出是否占用可用额度。")
+        with self.session() as repo:
+            repo.set_budget_lending(value)
+
+    def supplement(self, month, key, label, cents):
+        validate_month(month)
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("缺少补记编号。")
+        with self.session(immediate=True) as repo:
+            if cents is None:
+                repo.remove_supplement(key, month)
+            else:
+                if type(cents) is not int or cents <= 0 or not isinstance(label, str) or not label.strip():
+                    raise ValueError("请填写收入来源和正金额。")
+                repo.add_supplement(key, month, label.strip(), cents)
+
+    def classify_income(self, trade_id, kind, supplement_id=None):
+        with self.session(immediate=True) as repo:
+            row = repo.trade(trade_id)
+            if row is None or not income_status(row) or kind not in ("auto", "base", "extra", "ignore", "matched", "repayment"):
+                raise ValueError("请选择有效的收入流水和归属。")
+            if kind == "matched":
+                entries = repo.supplements(row["time"][:7])
+                if not any(s["id"] == supplement_id and s["cents"] == row["cents"]
+                           and s["trade_id"] in (None, trade_id) for s in entries):
+                    raise ValueError("请选择本月尚未匹配的同金额补记。")
+            repo.set_income_choice(trade_id, kind, supplement_id if kind == "matched" else None)
 
     def import_statement(self, statement):
         counts = {"added": 0, "changed": 0, "skipped": 0}
-        with self.session() as repo:
+        with self.session(immediate=True) as repo:
             for trade in statement.transactions:
                 old = repo.order(trade.platform, trade.order_id)
                 raw = asdict(trade)
@@ -55,6 +106,9 @@ class LedgerService:
                     changed = any(old[name] != value for name, value in raw.items())
                     repo.update_snapshot(dict(raw, exported_at=statement.exported_at))
                     counts["changed" if changed else "skipped"] += 1
+            # 使用历史样本为新订单初分。未安装 Node 时仍可按平台和商户规则判定。
+            if (counts["added"] or counts["changed"]) and which("node"):
+                classify(repo, "", "", apply=True)
         return counts
 
     def set_cap(self, cents):
@@ -71,11 +125,14 @@ class LedgerService:
             raise ValueError("请选择支出流水。")
         changed = 0
         with self.session(immediate=True) as repo:
+            pending = None
+            if pending_only and not sync_staged:
+                pending = {r["id"] for r in build_dashboard(repo)["rows"] if r["outflow"] and not r["daily_choice"]}
             for trade_id in set(ids):
                 tx = repo.trade(trade_id)
                 if tx is None or not is_outflow(tx):
                     raise ValueError("只能标记实际支出的流水。")
-                if pending_only and tx["initial_daily"] in ("yes", "no") and not sync_staged:
+                if pending is not None and trade_id not in pending:
                     continue
                 if sync_staged and tx["initial_daily"] == "pending" and choice is not None:
                     continue

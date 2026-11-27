@@ -17,7 +17,8 @@ class LedgerController:
 
     def ledger(self, request):
         query = request.query
-        ledger = self.service.dashboard(query.get("start", ""), query.get("end", ""), query.get("platform", ""))
+        ledger = self.service.dashboard(query.get("start", ""), query.get("end", ""), query.get("platform", ""),
+                                       query.get("budget_month", ""))
         return Response.json(ledger)
 
     def receipt_options(self, request):
@@ -48,3 +49,23 @@ class LedgerController:
         changed = self.service.mark_daily(data["ids"], data["choice"], data.get("pending_only", False),
                                           data.get("sync_staged", False))
         return Response.json({"changed": changed})
+
+
+    def set_allowance(self, request):
+        data = request.json()
+        self.service.set_allowance(data["month"], data["cents"])
+        return Response.json({"ok": True})
+
+    def set_budget_lending(self, request):
+        self.service.set_budget_lending(request.json()["value"])
+        return Response.json({"ok": True})
+
+    def supplement(self, request):
+        data = request.json()
+        self.service.supplement(data["month"], data["id"], data.get("label"), data["cents"])
+        return Response.json({"ok": True})
+
+    def classify_income(self, request):
+        data = request.json()
+        self.service.classify_income(data["id"], data["kind"], data.get("supplement_id"))
+        return Response.json({"ok": True})

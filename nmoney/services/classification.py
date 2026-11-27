@@ -7,11 +7,7 @@ import re
 import subprocess
 import unicodedata
 
-from .rules import DAILY, EXCLUSIONS, SPENDING
-from .ledger import build_dashboard
-
-
-NON_DAILY = (set(SPENDING + EXCLUSIONS) - set(DAILY) - {"美团"}) | {"已退款"}
+from .rules import SPENDING, daily_default, evaluate, is_outflow
 
 
 def text_key(value):
@@ -46,11 +42,19 @@ def clustered_rows(rows):
 
 
 def classify(repo, start, end, apply=False):
-    rows = [r for r in build_dashboard(repo, start, end)["rows"] if r["outflow"]]
+    cap = repo.cap()
+    # 复算时从平台字段和人工标注重建用途，旧预测不能投票给新预测。
+    rows = []
+    existing = {}
+    for tx in repo.trades(start, end, ""):
+        if is_outflow(tx):
+            existing[tx["id"]] = (tx["initial_daily"], tx["initial_category"])
+            rows.append(evaluate(dict(tx, initial_category=None), cap))
     groups = clustered_rows(rows)
     manual = {r["id"]: r["manual_category"] for r in rows if r["editable"] and r["manual_category"]}
-    # 推断新用途时，排除已有模型预测的交易，避免一个猜测在同组中被当成新的证据。
-    anchors = {r["id"]: r["category"] for r in rows if not r["initial_category"] and r["category"] != "未知"}
+    # 只让单笔标注或用户保存的商户规则为未知用途投票。
+    anchors = {r["id"]: r["category"] for r in rows if r["editable"] and r["category"] in SPENDING
+               and (r["manual_category"] or r["merchant_category"])}
     stats = Counter(manual_labels=len(manual), outflows=len(rows), clusters=sum(len(g) > 1 for g in groups))
     for group in groups:
         for row in group:
@@ -66,15 +70,12 @@ def classify(repo, start, end, apply=False):
                     and not any(k in row["source_category"] for k in ("转账", "红包", "群收款"))):
                 inferred = neighbor_category(row, group, anchors)
                 category = inferred or category
-            if row["manual_daily"] or row["initial_daily"]:
-                continue
-            if category in DAILY:
-                choice = "yes"
-            elif category in NON_DAILY:
-                choice = "no"
-            else:
-                choice = None
-            stats[choice or "uncertain"] += 1
-            if apply and (choice or inferred):
+            prior_daily, prior_category = existing[i]
+            choice = daily_default(category)
+            if not row["manual_daily"]:
+                stats[choice or "uncertain"] += 1
+            if prior_daily == "pending":
+                choice = "pending"
+            if apply and (choice, inferred) != (prior_daily, prior_category):
                 repo.set_initial_classification(i, choice, inferred)
     return dict(stats)

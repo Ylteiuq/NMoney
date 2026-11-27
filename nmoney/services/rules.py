@@ -27,6 +27,17 @@ KEYWORDS = (
 PLATFORM_CATEGORIES = {"餐饮美食": "餐饮", "日用百货": "日用", "交通出行": "交通", "医疗健康": "医疗"}
 
 
+NON_DAILY = (set(SPENDING + EXCLUSIONS) - set(DAILY) - {"美团"}) | {"已退款"}
+
+
+def daily_default(category):
+    if category in DAILY:
+        return "yes"
+    if category in NON_DAILY:
+        return "no"
+    return None
+
+
 def payment_state(tx):
     """先判定资金性质；退款入账与原支付的退款状态不能扣两次。"""
     kind, status = tx["source_category"], tx["status"]
@@ -136,7 +147,11 @@ def evaluate(tx, cap, receipts=()):
     # 用途（如餐饮）和日常归属分别决定。pending 保留用户主动撤回选择的意图。
     initial = tx["initial_daily"]
     manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
-    daily_choice = tx["daily_choice"] or (initial if initial in ("yes", "no") else None)
+    # 规则也适用于旧流水。显式撤回为待确认优先于规则；用途更正后立即更新默认值。
+    automatic = daily_default(category) or (initial if initial in ("yes", "no") else None)
+    daily_choice = None if manual_daily == "pending" else tx["daily_choice"] or automatic
+    if not outflow:
+        daily_choice = None
     personal = net
     if state == "退款待核对":
         personal = None

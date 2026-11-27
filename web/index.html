@@ -53,6 +53,20 @@
     <p id="notice" role="status" hidden></p>
     <p id="sync-info" class="sync-note" hidden>日常标记暂存在当前浏览器，重启账本服务后会自动同步。</p>
     <section id="overview">
+      <p id="budget-upgrade" class="sync-note" hidden>当前服务是旧版本。重启 NMoney 后即可查看月度可用余额。</p>
+      <section class="panel budget" id="budget" hidden aria-labelledby="budget-title">
+        <div class="panel-heading"><h2 id="budget-title">本月可用余额</h2><span class="hint" id="budget-period"></span></div>
+        <div class="budget-line"><strong id="budget-left"></strong><span id="budget-status"></span></div>
+        <div class="budget-track" aria-hidden="true"><i id="budget-meter"></i></div>
+        <p class="hint" id="budget-equation"></p>
+        <details id="budget-manage"><summary>收入与额度管理</summary>
+          <form id="base-form" class="budget-form"><label>本月基础生活费（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
+          <label class="loan-control">借款对各月余额的影响<select id="budget-lending"><option value="" disabled>请选择口径</option><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
+          <h3>手工补记收入</h3><div id="supplements"></div>
+          <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="quiet">添加收入</button></form>
+          <h3>账单转入</h3><div id="budget-incomes"></div>
+        </details>
+      </section>
       <section class="statement" aria-label="支出对账">
         <div class="balance">
           <div><h2>实际支付 <small>不含理财</small></h2>
@@ -109,15 +123,15 @@
 
     <section id="clusters" hidden>
       <div class="section-intro"><div><h2>按相似度分组</h2></div><span id="cluster-count" class="hint"></span></div>
-      <p class="section-description">按商户、商品和金额分组。展开可核对流水，或批量确认日常归属。</p>
+      <label class="cluster-filter"><input type="checkbox" id="review-only" checked>只看日常归属待确认</label>
       <div id="cluster-list"></div>
     </section>
 
     <section id="imports" hidden>
       <section class="panel upload">
         <h2>导入交易明细</h2><p>选择解压后的微信 XLSX 或支付宝 CSV 文件，可一次导入多份。</p>
-        <form id="import-form"><label class="filebox" id="file-drop"><input id="files" type="file" accept=".csv,.xlsx" multiple required><svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg><strong id="file-label">选择账单文件</strong><span id="file-hint">或将文件拖到这里</span></label>
-        <div id="selected-files" class="selected-files" hidden></div><button class="action" id="upload">导入所选文件</button></form>
+        <form id="import-form"><label class="filebox" id="file-drop"><input id="files" type="file" accept=".csv,.xlsx" multiple><svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg><strong id="file-label">选择账单文件</strong><span id="file-hint">支持多选，也可以分次添加或拖入</span></label>
+        <div id="selected-files" class="selected-files" hidden></div><button class="action" id="upload" disabled>导入所选文件</button></form>
         <div id="import-results" role="status"></div>
         <p class="hint">相同订单自动去重。重新导入会保留手工用途和备注。</p>
       </section>

@@ -260,7 +260,10 @@ function periodQuery() {
 async function refresh() {
   // 快速切换月份时，慢返回的旧查询不能覆盖最后一次选择。
   const version = ++state.request;
-  const url = "/api/ledger?" + periodQuery();
+  const query = periodQuery();
+  const period = $("period").value;
+  if (period && period !== "custom") query.set("budget_month", query.get("start").slice(0, 7));
+  const url = "/api/ledger?" + query;
   let data = await request(url);
   if (version !== state.request) return;
   const key = await choiceStore();
@@ -283,6 +286,8 @@ async function refresh() {
   $("period").replaceChildren(...options);
   $("period").value = selected;
   $("cap").value = data.cap / 100;
+  $("budget-upgrade").hidden = !query.has("budget_month") || Boolean(data.budget);
+  renderBudget(data.budget);
   renderOverview(data);
   renderDetails();
   if (state.page === "clusters") renderClusters();
@@ -295,8 +300,11 @@ function renderClusters() {
     return;
   }
   const groups = clusterOutflows(state.ledger.rows);
-  state.clusters = groups.filter(rows => rows.length > 1);
-  const singles = groups.length - state.clusters.length;
+  const onlyPending = $("review-only").checked;
+  state.clusters = groups.filter(rows => rows.length > 1)
+    .map(rows => onlyPending ? rows.filter(r => !r.daily_choice) : rows).filter(rows => rows.length);
+  const singleRows = groups.filter(rows => rows.length === 1).flat().filter(r => !onlyPending || !r.daily_choice);
+  const singles = singleRows.length;
   $("cluster-count").textContent = state.clusters.length + " 组相似支出 · " + singles + " 笔单列";
   const list = $("cluster-list");
   const opened = new Set([...list.querySelectorAll("details.cluster[open]")].map(el => el.dataset.first));
@@ -313,9 +321,66 @@ function renderClusters() {
       <div class="bill-list">${items}</div>
     </details>`;
   };
-  const singleRows = groups.filter(rows => rows.length === 1).flat();
   list.innerHTML = state.clusters.map(renderGroup).join("") + (singles ? renderGroup(singleRows, -1) : "");
+  if (groups.length && !state.clusters.length && !singles) list.innerHTML = '<p class="hint">这个范围的支出都已有日常归属。</p>';
   if (!groups.length) list.innerHTML = '<div class="panel empty-state"><svg class="icon" aria-hidden="true"><use href="#icon-clusters"/></svg><strong>当前范围没有支出流水</strong><p>选择其他时间范围，或先导入一份账单。</p></div>';
+}
+
+function renderBudget(budget) {
+  $("budget").hidden = !budget;
+  if (!budget) return;
+  if ($("budget").dataset.month !== budget.month) {
+    $("income-form").reset();
+    $("income-form").removeAttribute("data-entry-key");
+    $("budget").dataset.month = budget.month;
+  }
+  $("budget-period").textContent = budget.month + " · 全平台";
+  $("budget-title").textContent = "月度可用余额";
+  const settled = budget.remaining !== null;
+  const left = settled ? budget.remaining : budget.cash_left;
+  $("budget-left").textContent = (left < 0 ? "−" : "") + money(Math.abs(left));
+  $("budget-status").textContent = !settled ? "按现金算 · 借款口径待选" : budget.unpriced ? "暂计 · 有退款待核" :
+    (left < 0 ? "已超出月度额度" : "额度内") + (budget.total ? " · 已用 " + Math.max(0, Math.round((budget.total-left)/budget.total*100)) + "%" : "");
+  $("budget").classList.toggle("over", left < 0);
+  const used = budget.total - left;
+  $("budget-meter").style.width = (budget.total ? Math.min(100, Math.max(0, used / budget.total * 100)) : used > 0 ? 100 : 0) + "%";
+  const terms = ["生活费 " + money(budget.base), "额外收入 " + money(budget.manual + budget.extra), "实付 " + money(budget.spent)];
+  if (budget.lent && budget.lending !== 1) terms.push("其中借出 " + money(budget.lent));
+  if (budget.returned) terms.push("归还借款 " + money(budget.returned));
+  if (!settled) terms.push("剔除借款往来后剩 " + money(budget.spending_left));
+  if (budget.unpriced) terms.push(budget.unpriced + " 笔退款实付待核，余额为暂计");
+  $("budget-equation").textContent = terms.join(" · ");
+  $("base-amount").value = budget.base / 100;
+  $("budget-lending").value = budget.lending ?? "";
+  $("supplements").innerHTML = budget.supplements.map(s => '<div class="income-item"><div>' +
+    escapeHTML(s.label) + " · " + money(s.cents) + (s.trade_id ? " · 已匹配流水" : "") +
+    '</div><button class="row-action" data-remove-income="' + escapeHTML(s.id) + '">撤销补记</button></div>').join("");
+  const items = [];
+  for (const income of budget.incomes) {
+    const item = document.createElement("div");
+    item.className = "income-item";
+    const label = document.createElement("div");
+    label.textContent = income.merchant + " · " + money(income.cents);
+    const info = document.createElement("small");
+    info.textContent = [income.time.slice(5,10), income.platform, income.product !== "/" && income.product,
+      income.status === "waiting" ? "待到账" : "已到账"].filter(Boolean).join(" · ");
+    label.append(info);
+    const kinds = {extra:"计入额外收入", base:"已含在生活费", ignore:"不计额度", pending:"待核对", repayment:"归还借款"};
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", income.merchant + " 收入归属");
+    select.dataset.incomeId = income.id;
+    select.add(new Option(income.choice === "auto" ? "自动 · " + kinds[income.kind] : "恢复自动判断", "auto"));
+    for (const k of ["extra", "base", "repayment", "ignore"]) select.add(new Option(kinds[k], k));
+    for (const s of budget.supplements) {
+      if (s.cents === income.cents && (!s.trade_id || s.trade_id === income.id))
+        select.add(new Option("对应补记 · " + s.label, "matched:" + s.id));
+    }
+    select.value = income.choice === "matched" ? "matched:" + income.supplement_id : income.choice;
+    item.append(label, select);
+    items.push(item);
+  }
+  $("budget-incomes").replaceChildren(...items);
+  if (!items.length) $("budget-incomes").textContent = "本月没有需要归属的转入。";
 }
 
 function renderOverview(data) {
@@ -463,7 +528,8 @@ function tradeRow(row, gross = false) {
     ["交易状态", row.status], ["用途", row.category], ["统计状态", row.bucket], ["订单号", row.order_id], ["原始金额", money(row.cents)]);
   if (row.outflow) info.push(["个人实付", row.personal === null ? "退款待核对" : money(row.personal)]);
   if (row.note) info.push(["备注", row.note]);
-  if (row.daily_choice && row.initial_daily && !row.manual_daily) info.push(["日常归属来源", "模型初分"]);
+  if (row.outflow) info.push(["日常归属", row.daily_choice === "yes" ? "日常" : row.daily_choice === "no" ? "非日常" : "待确认"],
+    ["判断来源", row.manual_daily ? "手动选择" : row.daily_choice ? "自动初分" : "证据不足"]);
   for (const receipt of row.receipts) info.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
   if (row.include_over_cap) info.push(["上限例外", "已手动计入"]);
   if (row.group_receipt && row.linked_expense_id) info.push(["关联付款", row.linked_merchant]);
@@ -481,11 +547,12 @@ function tradeRow(row, gross = false) {
   }
   const net = row.outflow ? row.personal : row.net;
   const amount = gross ? row.cents : net;
-  const incoming = row.direction === "收入";
+  const waiting = row.income_status === "waiting";
+  const incoming = row.direction === "收入" && !waiting;
   const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
   const badge = ({"餐饮":"meal", "校园消费":"meal", "日用":"bag", "美团":"bag", "医疗":"health",
     "交通":"transit", "休闲":"ticket", "投资理财":"trend", "收入":"transfer", "内部划转":"transfer"})[row.category] || "wallet";
-  const description = [row.platform, row.product && row.product !== "/" ? row.product : row.category, row.time.slice(5, 16)].join(" · ");
+  const description = [waiting ? "待到账" : row.platform, row.product && row.product !== "/" ? row.product : row.category, row.time.slice(5, 16)].join(" · ");
   return `<details class="bill">
     <summary><span class="bill-icon bill-${badge}" aria-hidden="true"><svg class="icon"><use href="#icon-${badge}"/></svg></span>
       <span class="bill-text"><strong>${escapeHTML(merchantLabel(row))}</strong><small>${escapeHTML(description)}</small></span>
@@ -614,38 +681,67 @@ async function rowAction(event) {
   if (receipt) await openReceipt(Number(receipt.dataset.receipt));
 }
 
-function updateFileSelection() {
-  const files = Array.from($("files").files);
-  $("file-label").textContent = files.length ? "已选择 " + files.length + " 份账单" : "选择账单文件";
-  $("file-hint").textContent = files.length ? "点击可重新选择" : "或将文件拖到这里";
-  $("selected-files").hidden = !files.length;
-  $("selected-files").innerHTML = files.map(file => `<span>${escapeHTML(file.name)}<small>${file.size < 1024 * 1024 ?
-    (file.size / 1024).toFixed(1) + " KB" : (file.size / 1024 / 1024).toFixed(1) + " MB"}</small></span>`).join("");
-  $("upload").textContent = files.length ? "导入 " + files.length + " 份账单" : "导入所选文件";
+// 文件选择器每次只返回本次选择。队列允许从不同目录继续追加微信和支付宝文件。
+const importQueue = new Map();
+function queueFiles(files) {
+  for (const file of files) {
+    const key = JSON.stringify([file.name, file.size, file.lastModified]);
+    importQueue.set(key, file);
+  }
+  $("files").value = "";
+  renderImportQueue();
+}
+
+function renderImportQueue() {
+  const items = [];
+  for (const [key, file] of importQueue) {
+    const item = document.createElement("div");
+    const name = document.createElement("span");
+    name.textContent = file.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "row-action";
+    remove.textContent = "移除";
+    remove.setAttribute("aria-label", "移除 " + file.name);
+    remove.onclick = () => { importQueue.delete(key); renderImportQueue(); };
+    item.append(name, remove);
+    items.push(item);
+  }
+  $("selected-files").replaceChildren(...items);
+  $("selected-files").hidden = !items.length;
+  $("file-label").textContent = items.length ? "继续添加文件" : "选择账单文件";
+  $("upload").textContent = items.length ? "导入 " + items.length + " 份账单" : "导入所选文件";
+  $("upload").disabled = !items.length;
 }
 
 async function importFiles() {
-  const files = Array.from($("files").files);
+  const batch = [...importQueue];
+  if (!batch.length || $("upload").disabled) return;
   $("upload").disabled = true;
+  $("files").disabled = true;
+  $("selected-files").inert = true;
   $("import-results").replaceChildren();
   try {
-    for (const file of files) {
+    await Promise.all(batch.map(async ([key, file]) => {
       const line = document.createElement("p");
-      $("import-results").appendChild(line);
+      $("import-results").append(line);
       line.textContent = file.name + " · 正在导入…";
       try {
         const result = await request("/api/import?" + new URLSearchParams({filename: file.name}), {
           method: "POST", headers: {"X-NMoney": "1", "Content-Type": "application/octet-stream"}, body: file
         });
         line.textContent = file.name + " · 新增 " + result.added + " 笔，更新 " + result.changed + " 笔，重复 " + result.skipped + " 笔。";
+        importQueue.delete(key);
       } catch (error) {
         line.textContent = file.name + " · " + error.message;
         line.className = "error";
       }
-    }
+    }));
     await refresh();
   } finally {
-    $("upload").disabled = false;
+    $("files").disabled = false;
+    $("selected-files").inert = false;
+    renderImportQueue();
   }
 }
 
@@ -677,12 +773,50 @@ function bindLedger() {
       return refresh();
     });
   }
+  on("base-form", "submit", async () => {
+    await post("/api/budget/base", {month: state.ledger.budget.month, cents: Math.round(Number($("base-amount").value) * 100)});
+    await refresh();
+  });
+  on("budget-lending", "change", async () => {
+    await post("/api/budget/lending", {value: Number($("budget-lending").value)});
+    await refresh();
+  });
+  on("income-form", "input", () => $("income-form").removeAttribute("data-entry-key"));
+  on("income-form", "submit", async () => {
+    const form = $("income-form");
+    const month = state.ledger.budget.month;
+    const button = form.querySelector("button");
+    if (button.disabled) return;
+    button.disabled = true;
+    form.dataset.entryKey ??= crypto.randomUUID();
+    try {
+      await post("/api/budget/supplement", {month, id: form.dataset.entryKey, label: $("income-label").value,
+        cents: Math.round(Number($("income-amount").value) * 100)});
+      form.reset();
+      form.removeAttribute("data-entry-key");
+      await refresh();
+    } finally { button.disabled = false; }
+  });
+  on("supplements", "click", async e => {
+    const button = e.target.closest("[data-remove-income]");
+    if (!button) return;
+    await post("/api/budget/supplement", {id: button.dataset.removeIncome, month: state.ledger.budget.month, cents: null});
+    await refresh();
+  });
+  on("budget-incomes", "change", async e => {
+    const select = e.target.closest("[data-income-id]");
+    if (!select) return;
+    const [kind, id] = select.value.split(":");
+    try { await post("/api/budget/income", {id: Number(select.dataset.incomeId), kind, supplement_id: id}); }
+    finally { await refresh(); }
+  });
   on("cap-form", "submit", async () => {
     await post("/api/cap", {cents: Math.round(Number($("cap").value) * 100)});
     await refresh();
     $("cap-control").open = false;
     notice("已保存上限，合计已重新计算。");
   });
+  on("review-only", "change", renderClusters);
   on("open-included", "click", () => toggleDrill("included"));
   on("open-daily", "click", () => toggleDrill("daily"));
   on("fold-drill", "click", () => toggleDrill(state.drill));
@@ -783,7 +917,7 @@ function bindLedger() {
     await refresh();
     notice("用途已保存。");
   });
-  on("files", "change", updateFileSelection);
+  on("files", "change", () => queueFiles($("files").files));
   for (const eventName of ["dragenter", "dragover"]) {
     $("file-drop").addEventListener(eventName, event => {
       event.preventDefault();
@@ -794,9 +928,7 @@ function bindLedger() {
   $("file-drop").addEventListener("drop", event => {
     event.preventDefault();
     $("file-drop").classList.remove("dragging");
-    if (!event.dataTransfer.files.length) return;
-    $("files").files = event.dataTransfer.files;
-    updateFileSelection();
+    if (!$("files").disabled) queueFiles(event.dataTransfer.files);
   });
   on("import-form", "submit", importFiles);
   Promise.resolve().then(applyRoute).catch((error) => notice(error.message, true));

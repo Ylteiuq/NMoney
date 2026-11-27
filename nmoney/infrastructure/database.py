@@ -59,9 +59,27 @@ CREATE TABLE IF NOT EXISTS aa_links (
 );
 CREATE INDEX IF NOT EXISTS aa_expense ON aa_links(expense_id);
 
+-- 生活费按自然月设置。没有设置的月份沿用默认生活费。
+CREATE TABLE IF NOT EXISTS monthly_allowances (
+    month TEXT PRIMARY KEY,               -- YYYY-MM，独立于交易平台。
+    cents INTEGER NOT NULL CHECK(cents >= 0) -- 这个月可使用的基础生活费，单位为分。
+);
+-- 用户补记未出现在平台账单中的收入，例如打进银行卡的劳务费。
+CREATE TABLE IF NOT EXISTS income_supplements (
+    id TEXT PRIMARY KEY,                  -- 客户端为本次补记生成的稳定标识，重试时不会重复入账。
+    month TEXT NOT NULL,                  -- 该笔收入归属的自然月 YYYY-MM。
+    label TEXT NOT NULL,                  -- 用户填写的来源或说明，例如「劳务费」。
+    cents INTEGER NOT NULL CHECK(cents > 0) -- 已收到的金额，单位为分。
+);
+CREATE TABLE IF NOT EXISTS income_choices (
+    trade_id INTEGER PRIMARY KEY REFERENCES trades(id), -- 对应的一条平台收入流水，重导沿用同一个 ID。
+    kind TEXT NOT NULL,                   -- extra 增加额度，base 已含在生活费，ignore 忽略，repayment 归还借款，matched 对应手工补记。
+    supplement_id TEXT UNIQUE REFERENCES income_supplements(id) ON DELETE CASCADE -- matched 对应的补记，每笔最多认领一次。
+);
+
 -- 全账本共用的整数设置。
 CREATE TABLE IF NOT EXISTS settings (
-    name TEXT PRIMARY KEY,               -- 设置键。目前使用 cap 表示计入消费的单笔上限。
+    name TEXT PRIMARY KEY,               -- 设置键。cap 为单笔上限，budget_lending 决定借出是否占用月度额度。
     value INTEGER NOT NULL               -- 键对应的整数值。cap 的单位为分，10000 表示 100 元。
 );
 INSERT OR IGNORE INTO settings VALUES ('cap', 10000);

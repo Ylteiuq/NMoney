@@ -220,3 +220,37 @@ dialog .check { display: flex; align-items: center; gap: 5px; }
   .category-layout { grid-template-columns: 1fr; }
   .dates { flex-basis: 100%; }
 }
+
+.selected-files > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.selected-files > div > span { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) {
+  .bill[open] .bill-detail, dialog[open], #budget-manage[open] .budget-form { animation: ledger-enter 160ms ease-out; }
+  nav button, .quiet, .action, .metrics button, .category-row { transition: background-color 140ms ease, color 140ms ease; }
+  .bill > summary .arrow { transition: transform 140ms ease; }
+  @keyframes ledger-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+}
+
+.budget { margin-bottom: 16px; padding: 20px 32px 10px; }
+.budget .panel-heading { margin-bottom: 4px; }
+.budget-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+#budget-left { font-size: clamp(29px, 4vw, 43px); font-weight: 650; letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
+#budget-status { font-size: 13px; color: var(--muted); }
+.budget.over #budget-left { color: #ad3733; }
+.budget-track { height: 5px; background: #e6eef8; border-radius: 3px; max-width: 440px; margin: 7px 0 8px; overflow: hidden; }
+.budget-track i { display: block; height: 100%; width: 0; background: var(--blue); }
+.budget.over .budget-track i { background: #ad3733; }
+#budget-manage { border-top: 1px solid var(--line); margin-top: 14px; }
+#budget-manage > summary { color: var(--blue); padding-block: 9px; font-size: 14px; }
+#budget-manage h3 { margin: 16px 0 6px; }
+.budget-form, .income-item { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 8px 0; }
+.budget-form label, .loan-control { display: grid; gap: 3px; font-size: 13px; }
+.budget-form input { width: 154px; }
+.loan-control { width: fit-content; margin: 12px 0; }
+.income-item { flex-wrap: nowrap; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 7px; font-size: 14px; }
+.income-item > div { min-width: 0; overflow-wrap: anywhere; }
+.income-item small { display: block; }
+.income-item select { max-width: 50%; font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) { .budget-track i { transition: width 240ms ease-out; } }
+@media (max-width: 680px) { .budget { padding: 15px 18px 6px; } .budget-form input { max-width: 135px; } }
+
+.cluster-filter { display: inline-flex; gap: 6px; align-items: center; margin-bottom: 16px; font-size: 14px; }

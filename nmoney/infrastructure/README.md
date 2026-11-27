@@ -74,3 +74,12 @@
 | `value` | INTEGER NOT NULL | 对应设置的整数值。初始化为 `cap` 填入 `10000`（100 元），再次启动保留用户已修改的值。 |
 
 在 SQLite 命令行执行 `PRAGMA table_info(trades);` 可核对本地表的列、默认值和主键，用 `PRAGMA foreign_key_list(aa_links);` 可查看两个外键的实际指向。
+
+### 月度生活费与收入
+
+| 表 | 字段 | 含义 |
+| --- | --- | --- |
+| monthly_allowances | month, cents | 自然月和当月基础生活费（分）。没有设置的月份使用 2,000 元。 |
+| income_supplements | id, month, label, cents | 补记编号、到账月份、来源说明和到账金额（分）。相同编号可安全重试。 |
+| income_choices | trade_id, kind, supplement_id | 平台流水号、人工指定的额度归属和对应补记编号。每条补记最多关联一条转入。删除补记时对应的匹配会一并解除。 |
+| settings | budget_lending 对应的 value | 1 表示借出占额度、还款补回，0 表示两者均排除。尚未选定时同时列出两种余额。 |
