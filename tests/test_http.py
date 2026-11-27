@@ -54,7 +54,7 @@ class HttpContractTest(unittest.TestCase):
         self.assertEqual((status, mime), ("200 OK", "application/json; charset=utf-8"))
         self.assertEqual(json.loads(data), {"app": "NMoney", "database": str(self.path.resolve())})
         for path, mime in (("/", "text/html"), ("/app.js", "text/javascript"), ("/style.css", "text/css"),
-                           ("/favicon.svg", "image/svg+xml")):
+                           ("/clustering.js", "text/javascript"), ("/favicon.svg", "image/svg+xml")):
             status, actual, body = self.call("GET", path, **{"wsgi.input": UnreadableBody()})
             self.assertEqual((status, actual), ("200 OK", mime + "; charset=utf-8"))
             self.assertTrue(body)

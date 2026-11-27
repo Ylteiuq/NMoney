@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { clusterOutflows } = require("../web/app.js");
+const { clusterOutflows } = require("../web/clustering.js");
 
 function trade(id, merchant, product, cents, outflow = true) {
   return { id, merchant, product, cents, outflow };

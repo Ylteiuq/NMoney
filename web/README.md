@@ -6,7 +6,8 @@
 | --- | --- |
 | [index.html](index.html) | 概览、交易明细、相似支出、导入账单四个视图，以及编辑用途和关联回款的对话框。 |
 | [style.css](style.css) | 颜色、排版、表格、图表和小屏布局。 |
-| [app.js](app.js) | 读取账本数据，处理筛选、排序、分页、图表和操作请求。`clusterOutflows` 同时供浏览器和本机 Node 初分脚本使用。 |
+| [app.js](app.js) | 读取账本数据，处理筛选、排序、分页、图表和操作请求。 |
+| [clustering.js](clustering.js) | `clusterOutflows` 按商户、商品和金额分组。网页和命令行初分共用，不依赖 DOM。 |
 | [favicon.svg](favicon.svg) | 浏览器标签页图标。 |
 
 **从分类图追到一条流水。** 从概览点分类，地址中的 `#` 片段记录选中的分类和筛选条件。`applyRoute` 恢复视图，`renderDetails` 对服务返回的 `rows` 应用分类、关键词和排序，每页展示 40 笔。原金额和个人实付都以分传输，在展示时转换为元。
