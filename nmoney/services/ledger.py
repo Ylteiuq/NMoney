@@ -10,7 +10,7 @@ from .clustering import clustered_rows
 from .loans import loan_accounts
 
 from .rules import (
-    CHOICES, LEGACY_CATEGORIES, SPENDING, after_refund, evaluate, is_group_receipt,
+    CHOICES, LEGACY_CATEGORIES, OVER_CAP_CATEGORIES, after_refund, evaluate, is_group_receipt,
     payment_state, receipts_by_expense, summarize,
 )
 
@@ -36,7 +36,7 @@ def build_dashboard(repo, start="", end="", platform="", loans=None):
             if loan["daily_loss"]:
                 row.update(daily=True, daily_choice="yes", daily_cents=loan["daily_loss"],
                            daily_category="借款结清差额", daily_lock="手动结清，仅差额计日常")
-    return dict(cap=cap, rows=rows, choices=CHOICES, available_months=repo.available_months(), **summarize(rows))
+    return dict(cap=cap, rows=rows, choices=CHOICES, over_cap_categories=OVER_CAP_CATEGORIES, available_months=repo.available_months(), **summarize(rows))
 
 
 class LedgerService:
@@ -57,8 +57,8 @@ class LedgerService:
                 validate_month(budget_month)
                 year, month = map(int, budget_month.split("-"))
                 first, last = budget_month + "-01", f"{budget_month}-{monthrange(year, month)[1]}"
-                rows = data["rows"] if (start, end, platform) == (first, last, "") else build_dashboard(repo, first, last, loans=loans)["rows"]
-                data["budget"] = budget_report(repo, budget_month, rows, loans)
+                month_data = data if (start, end, platform) == (first, last, "") else build_dashboard(repo, first, last, loans=loans)
+                data["budget"] = budget_report(repo, budget_month, month_data, loans)
             data["clusters"] = [[r["id"] for r in group] for group in clustered_rows(data["rows"])]
             return data
 
@@ -71,7 +71,7 @@ class LedgerService:
 
     def set_budget_lending(self, value):
         if type(value) is not int or value not in (0, 1):
-            raise ValueError("请选择借出是否占用可用额度。")
+            raise ValueError("请选择对账时如何计算借款。")
         with self.session() as repo:
             repo.set_budget_lending(value)
 
@@ -191,7 +191,7 @@ class LedgerService:
         return changed
 
     def annotate(self, trade_id, category, note="", rule="keep", include_over_cap=None):
-        with self.session() as repo:
+        with self.session(immediate=True) as repo:
             row = repo.trade(trade_id)
             if row is None or payment_state(row) != "支出":
                 raise ValueError("只有付款记录可以补用途。")
@@ -205,12 +205,16 @@ class LedgerService:
                     raise ValueError("请先重新打开借款并解除还款关联，再修改用途。")
             repo.annotate(trade_id, category, note.strip())
             if include_over_cap is not None:
-                if include_over_cap and (category not in SPENDING or category == "医疗"):
+                if include_over_cap and category not in OVER_CAP_CATEGORIES:
                     raise ValueError("请先选择一项消费用途，再手动计入。")
                 if include_over_cap:
                     repo.include_over_cap(trade_id)
+                    repo.upsert_daily_choice(trade_id, "yes")
                 else:
-                    repo.remove_exception(trade_id)
+                    removed = repo.remove_exception(trade_id)
+                    received = sum(r["cents"] for r in linked_receipts(repo).get(trade_id, ()))
+                    if removed or (after_refund(row) - received > repo.cap() and repo.has_daily_choice(trade_id)):
+                        repo.upsert_daily_choice(trade_id, "no")
             if rule == "remove":
                 repo.remove_merchant_rule(row["platform"], row["merchant"])
             elif rule == "set" and row["merchant"] not in {"", "/"}:

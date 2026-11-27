@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS loan_settlements (
 
 -- 全账本共用的整数设置。
 CREATE TABLE IF NOT EXISTS settings (
-    name TEXT PRIMARY KEY,               -- 设置键。cap 为单笔上限，budget_lending 决定借出是否占用月度额度。
+    name TEXT PRIMARY KEY,               -- 设置键。cap 为单笔上限，budget_lending 决定对账时如何计算借款本金。
     value INTEGER NOT NULL               -- 键对应的整数值。cap 的单位为分，10000 表示 100 元。
 );
 INSERT OR IGNORE INTO settings VALUES ('cap', 10000);

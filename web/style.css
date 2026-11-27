@@ -83,7 +83,7 @@ dl > div { display: flex; justify-content: space-between; gap: 12px; }
 dt { color: var(--muted); }
 dd, .money, .metrics strong, .bill-amount, .category-row strong { font-variant-numeric: tabular-nums; }
 #payment-scope { margin: 0 32px 20px; font-size: 13px; color: var(--muted); }
-.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); padding: 14px 8px; }
+.metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); padding: 14px 8px; }
 .metrics button { display: grid; align-content: start; text-align: left; padding: 2px 24px; border-left: 1px solid var(--line); }
 .metrics button:first-child { border-left: none; }
 .metrics button:hover, .metrics button[aria-expanded=true] { background: #f6faff; }

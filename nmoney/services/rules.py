@@ -10,6 +10,7 @@ SPENDING = DAILY + ("美团", "医疗", "会员订阅", "休闲", "人情", "其
 LEGACY_CATEGORIES = {"咖啡": "餐饮", "数码": "休闲", "洗衣": "日用"}
 EXCLUSIONS = ("借出", "代付待回款", "投资理财", "内部划转", "其他非消费")
 CHOICES = ("未知",) + SPENDING + EXCLUSIONS
+OVER_CAP_CATEGORIES = tuple(category for category in SPENDING if category != "医疗")
 
 # 平台大类有时只是商户注册时填的，商品说明往往更具体。
 KEYWORDS = (
@@ -142,27 +143,32 @@ def evaluate(tx, cap, receipts=()):
         remaining = after_refund(tx)
         refund = tx["cents"] - remaining
         net = max(0, remaining - received)
+    initial = tx["initial_daily"]
+    manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
+    # 兼容历史的超限例外。用户后来逐笔改为非日常或待确认时，以新决定为准。
+    if manual_daily is None and tx["include_over_cap"]:
+        manual_daily = "yes"
+    over_cap = state == "支出" and net > cap
     if state != "支出":
         bucket, category = "非消费", state
     elif category == "医疗":
         bucket = "医疗单列"
     elif category in EXCLUSIONS:
         bucket = "非消费"
-    elif net > cap and not tx["include_over_cap"]:
+    elif over_cap and manual_daily != "yes":
         bucket = "超上限"
     elif category == "未知":
         bucket = "待分类"
     else:
         bucket = "已计入"
     outflow = is_outflow(tx)
-    # 用途（如餐饮）和日常归属分别决定。pending 保留用户主动撤回选择的意图。
-    initial = tx["initial_daily"]
-    manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
     # 规则也适用于旧流水。显式撤回为待确认优先于规则；用途更正后立即更新默认值。
     automatic = daily_default(category) or (initial if initial in ("yes", "no") else None)
     if tx["daily_source"] in ("peers", "conflict"):
         automatic = initial if initial in ("yes", "no") else None
-    daily_choice = None if manual_daily == "pending" else tx["daily_choice"] or automatic
+    if over_cap:
+        automatic = "no"
+    daily_choice = None if manual_daily == "pending" else manual_daily or automatic
     if not outflow:
         daily_choice = None
     personal = net
@@ -176,11 +182,11 @@ def evaluate(tx, cap, receipts=()):
     if outflow:
         if category in ("医疗", "借出", "投资理财"):
             lock = category + "单列"
-        elif personal is not None and personal > cap:
-            lock = "个人实付超过单笔上限"
+        elif over_cap and category in EXCLUSIONS:
+            lock = category + "单列"
         if lock:
             daily_choice = "no"
-    return dict(tx, daily_lock=lock, daily_cents=personal if daily_choice == "yes" else 0, daily_category=category,
+    return dict(tx, over_daily_cap=over_cap, daily_lock=lock, daily_cents=personal if daily_choice == "yes" else 0, daily_category=category,
                 manual_category=manual, merchant_category=merchant, category=category,
                 bucket=bucket, net=net, editable=state == "支出",
                 outflow=outflow, personal=personal if outflow else None,
@@ -193,6 +199,7 @@ def evaluate(tx, cap, receipts=()):
 def summarize(rows):
     groups = {key: {"count": 0, "cents": 0} for key in ("已计入", "日常生活", "待分类", "超上限")}
     categories = defaultdict(int)
+    daily_categories = defaultdict(int)
     funds = defaultdict(lambda: {"count": 0, "cents": 0})
     months = defaultdict(lambda: {"cents": 0, "count": 0, "pending": 0, "invested": 0,
                                  "outflow": 0, "daily": 0, "paid": 0, "paid_unpriced": 0})
@@ -230,6 +237,7 @@ def summarize(rows):
                 else:
                     groups["日常生活"]["cents"] += row["daily_cents"]
                     month["daily"] += row["daily_cents"]
+                    daily_categories[row["daily_category"]] += row["daily_cents"]
         if row["fund"]:
             fund = funds[row["fund"]]
             fund["count"] += 1
@@ -252,6 +260,7 @@ def summarize(rows):
             month["cents"] += row["net"]
     return {"outflow": outflow, "payments": payments, "groups": groups, "known_over_cap": known_over_cap, "deducted_receipts": deducted_receipts,
             "known_spending": groups["已计入"]["cents"] + known_over_cap,
+            "daily_categories": sorted(daily_categories.items(), key=lambda pair: -pair[1]),
             "categories": sorted(categories.items(), key=lambda pair: -pair[1]),
             "funds": sorted(funds.items(), key=lambda pair: -pair[1]["cents"]),
             "invested": sum(item["cents"] for item in funds.values()),

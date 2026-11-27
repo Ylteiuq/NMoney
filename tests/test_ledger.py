@@ -179,6 +179,10 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(candidates[0]["id"], ids["meal"])
         self.fetch("/api/aa", {"receipt_id": ids["B"], "expense_id": ids["other"]})
         self.fetch("/api/aa", {"receipt_id": ids["A"], "expense_id": None})
+        # 回款解除后个人实付重新超限，先前的手动日常决定仍然有效。
+        after_unlink = self.fetch("/api/ledger", query=november)
+        self.assertEqual(after_unlink["groups"]["日常生活"]["cents"], 11200)
+        self.fetch("/api/daily", {"ids": [ids["meal"]], "choice": "no"})
         before_override = self.fetch("/api/ledger", query=november)
         self.assertEqual(before_override["known_over_cap"], 11200)
         self.assertEqual(before_override["deducted_receipts"], 0)
@@ -336,8 +340,8 @@ class LedgerTest(unittest.TestCase):
         def budget():
             return self.fetch("/api/ledger", query=query)["budget"]
         report = budget()
-        self.assertEqual((report["total"], report["spent"], report["lent"]), (270000, 110800, 47800))
-        self.assertEqual((report["remaining"], report["cash_left"], report["spending_left"]), (207000,159200,207000))
+        self.assertEqual((report["total"], report["spent"], report["lent"]), (270000, 0, 47800))
+        self.assertEqual((report["remaining"], report["cash_left"], report["spending_left"]), (270000,159200,207000))
         self.assertEqual(len(report["incomes"]),4)
         self.assertEqual({r["order_id"] for r in report["incomes"]}, {"base","wages","sale","unknown"})
         manual = {"month":"2026-11", "id":"bank", "label":"银行卡劳务", "cents":70000}
@@ -348,21 +352,62 @@ class LedgerTest(unittest.TestCase):
         self.fetch("/api/budget/income", {"id":ids["aa"],"kind":"extra"}, status="400 Bad Request")
         self.fetch("/api/budget/income", {"id":ids["unknown"],"kind":"matched","supplement_id":"bank"}, status="400 Bad Request")
         self.fetch("/api/budget/lending", {"value":1})
-        self.assertEqual(budget()["remaining"],159200)
+        self.assertEqual((budget()["remaining"],budget()["reconciliation_remaining"]), (270000,159200))
         self.fetch("/api/budget/lending", {"value":0})
-        self.assertEqual(budget()["remaining"],207000)
+        self.assertEqual((budget()["remaining"],budget()["reconciliation_remaining"]), (270000,207000))
         self.fetch("/api/budget/base", {"month":"2026-11","cents":180000})
-        self.assertEqual(budget()["remaining"],187000)
+        self.assertEqual(budget()["remaining"],250000)
         self.fetch("/api/budget/supplement", dict(manual,cents=None))
         self.assertEqual((budget()["extra"],budget()["manual"]), (70000,0))
         self.fetch("/api/budget/income", {"id":ids["sale"],"kind":"extra"})
-        self.assertEqual(budget()["remaining"],187000)
+        self.assertEqual(budget()["remaining"],250000)
         # 同一订单的较新快照确认收货，卖货款只在这时候进入可用额度。
         with database(self.path) as conn:
             updated = tx("sale", 8000, "收入", "收入", "买家", "闲鱼卖笔", "交易成功")
             import_statement(conn, Statement("支付宝", "2026-12-04", [updated]))
-        self.assertEqual(budget()["remaining"],195000)
+        self.assertEqual(budget()["remaining"],258000)
         self.assertEqual(self.fetch("/api/ledger", query={"budget_month":"2026-12"})["budget"]["remaining"],200000)
+
+    def test_daily_budget_chart_and_details_follow_manual_overrides(self):
+        def pay(order, amount, category, platform="支付宝"):
+            return Transaction(platform, order, "2026-11-10 12:00:00", order, category, category, "支出", amount, "交易成功")
+        trades = [pay("regular", 1250, "餐饮美食"), pay("gift", 20000, "生日"), pay("pen", 25900, "日用百货"),
+                  pay("member", 63000, "订阅", "微信"), pay("extra", 3700, "电影票")]
+        ids = self.add_trades(*trades)
+        # 历史版本分别保存了上限例外和日常手动选择，升级后都应生效。
+        with database(self.path) as conn:
+            conn.execute("INSERT INTO included_exceptions VALUES (?)", (ids["gift"],))
+            conn.execute("INSERT INTO daily_choices VALUES (?, 'yes')", (ids["pen"],))
+        query = {"start": "2026-11-01", "end": "2026-11-30", "budget_month": "2026-11"}
+        def report(**filters):
+            return self.fetch("/api/ledger", query=dict(query, **filters))
+        def assert_totals(cents, count):
+            data = report()
+            self.assertEqual(data["budget"]["spent"], cents)
+            self.assertEqual(data["budget"]["remaining"], data["budget"]["total"] - cents)
+            self.assertEqual(data["groups"]["日常生活"], {"cents": cents, "count": count})
+            self.assertEqual(dict(data["months"])["2026-11"]["daily"], cents)
+            details = {}
+            for row in data["rows"]:
+                if row["daily"]:
+                    name = row["daily_category"]
+                    details[name] = details.get(name, 0) + row["daily_cents"]
+            self.assertEqual(dict(data["daily_categories"]), details)
+            self.assertEqual(sum(details.values()), cents)
+        assert_totals(47150, 3)
+        self.fetch("/api/daily", {"ids": [ids[k] for k in ("gift", "pen", "member")], "choice": "yes"})
+        self.add_trades(*trades)
+        self.app = application(self.path)
+        assert_totals(110150, 4)
+        wechat = report(platform="微信")
+        self.assertEqual(wechat["daily_categories"], [["会员订阅", 63000]])
+        self.assertEqual(wechat["budget"]["spent"], 110150)
+        self.fetch("/api/daily", {"ids": [ids["gift"]], "choice": None})
+        assert_totals(90150, 3)
+        gift = next(r for r in report()["rows"] if r["id"] == ids["gift"])
+        self.assertIsNone(gift["daily_choice"])
+        self.fetch("/api/daily", {"ids": [ids["pen"]], "choice": "no"})
+        assert_totals(64250, 2)
 
     def test_import_defaults_and_manual_review(self):
         ids = self.add_trades(
@@ -399,7 +444,7 @@ class LedgerTest(unittest.TestCase):
         for name in ("first","first","second"):
             link(name)
         dec = month("2026-12")["budget"]
-        self.assertEqual((dec["extra"],dec["returned"],dec["remaining"]), (0,40000,240000))
+        self.assertEqual((dec["extra"],dec["returned"],dec["remaining"],dec["cash_left"]), (0,40000,200000,240000))
         self.assertEqual(dec["loans"][0]["outstanding"],7800)
         self.assertEqual(month("2026-11")["groups"]["日常生活"]["cents"],0)
         settle(True)
@@ -408,8 +453,9 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual((row["category"],row["personal"],row["daily_category"],row["daily_cents"]),
                          ("借出",47800,"借款结清差额",7800))
         self.assertEqual(nov["groups"]["日常生活"]["cents"],7800)
-        self.assertEqual((nov["budget"]["remaining"],nov["budget"]["spending_left"]), (152200,192200))
-        self.assertEqual(month("2026-12")["budget"]["remaining"],240000)
+        self.assertEqual((nov["budget"]["remaining"],nov["budget"]["cash_left"]), (192200,152200))
+        self.assertEqual(nov["daily_categories"], [["借款结清差额", 7800]])
+        self.assertEqual(month("2026-12")["budget"]["remaining"],200000)
         self.fetch("/api/budget/income",{"id":ids["first"],"kind":"extra"},status="400 Bad Request")
         settle(False)
         self.assertEqual(month("2026-11")["groups"]["日常生活"]["cents"],0)
@@ -426,10 +472,10 @@ class LedgerTest(unittest.TestCase):
         def report():
             return self.fetch("/api/ledger",query={"budget_month":"2026-11"})
         d = report()
-        self.assertEqual((d["budget"]["medical"],d["budget"]["spent"],d["payments"]["cents"]), (132051,20100,152151))
+        self.assertEqual((d["budget"]["medical"],d["budget"]["spent"],d["payments"]["cents"]), (132051,10000,152151))
         self.assertEqual(d["groups"]["日常生活"]["cents"],10000)
         self.fetch("/api/annotate",{"id":ids["high"],"category":"餐饮","note":"","rule":"keep","include_over_cap":True})
-        self.assertEqual(report()["groups"]["日常生活"]["count"],1)
+        self.assertEqual(report()["groups"]["日常生活"], {"count": 2, "cents": 20100})
         self.fetch("/api/daily",{"ids":[ids["doctor"]],"choice":"yes"},status="400 Bad Request")
         self.fetch("/api/aa",{"receipt_id":ids["aa"],"expense_id":ids["high"]})
         self.assertEqual(report()["groups"]["日常生活"]["cents"],19900)

@@ -40,22 +40,20 @@ def default_income_kind(row, supplements):
     return "pending"
 
 
-def budget_report(repo, month, rows, loans):
+def budget_report(repo, month, month_data, loans):
     base = repo.allowance(month)
     base = 200000 if base is None else base
     supplements = repo.supplements(month)
     manual = sum(s["cents"] for s in supplements)
     extra = 0
     incomes = []
-    spent = lent = returned = unpriced = medical = loan_loss = 0
-    for row in rows:
+    payments = lent = returned = medical = loan_loss = 0
+    for row in month_data["rows"]:
         if row["payment"]:
             if row["category"] == "医疗":
                 medical += row["personal"] or 0
-            elif row["personal"] is None:
-                unpriced += 1
-            else:
-                spent += row["personal"]
+            elif row["personal"] is not None:
+                payments += row["personal"]
                 if row["category"] == "借出":
                     lent += row["personal"]
                     loan_loss += row["daily_cents"] or 0
@@ -72,13 +70,20 @@ def budget_report(repo, month, rows, loans):
                        {"kind": kind, "choice": row["income_choice"] or "auto", "status": status})
     total = base + manual + extra
     lending = repo.budget_lending()
-    # 默认采用生活费口径。借款本金挂账，只有确认放弃收回的差额占用预算。
+    # 对账默认将借款本金单列，只有已结清的未还差额计作开支。
     lending = 0 if lending is None else lending
-    cash_left = total + returned - spent
-    spending_left = total - spent + lent - loan_loss
-    remaining = cash_left if lending else spending_left
+    cash_left = total + returned - payments
+    spending_left = total - payments + lent - loan_loss
+    # 首页预算直接使用日常明细的汇总，借款核对与其他支付只影响资金对账。
+    spent = month_data["groups"]["日常生活"]["cents"]
+    unpriced = month_data["outflow"]["daily_unpriced"]
     visible_loans = [loan for loan in loans.values() if loan["time"][:7] <= month and
                      (not loan["closed"] or loan["time"][:7] == month or
                       any(r["time"][:7] == month for r in loan["repayments"]))]
-    return dict(medical=medical, loan_loss=loan_loss, loans=visible_loans, month=month, base=base, manual=manual, extra=extra, total=total, spent=spent, lent=lent, returned=returned, lending=lending,
-                remaining=remaining, cash_left=cash_left, spending_left=spending_left, unpriced=unpriced, incomes=incomes, supplements=supplements)
+    return dict(
+        month=month, base=base, manual=manual, extra=extra, total=total,
+        spent=spent, remaining=total - spent, unpriced=unpriced,
+        medical=medical, lent=lent, returned=returned, loan_loss=loan_loss, loans=visible_loans,
+        lending=lending, reconciliation_remaining=cash_left if lending else spending_left,
+        cash_left=cash_left, spending_left=spending_left, incomes=incomes, supplements=supplements,
+    )

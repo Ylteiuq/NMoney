@@ -169,7 +169,7 @@ async function refresh() {
   const url = "/api/ledger?" + query;
   let data = await request(url);
   if (version !== state.request) return;
-  if (!Array.isArray(data.clusters)) {
+  if (!Array.isArray(data.daily_categories)) {
     $(state.page).hidden = true;
     throw new Error("正在运行旧版后端。请重启 NMoney 服务后刷新，读取更新后的账本。");
   }
@@ -230,20 +230,21 @@ function renderBudget(budget) {
     $("budget").dataset.month = budget.month;
   }
   $("budget-period").textContent = budget.month + " · 全平台";
-  const left = budget.remaining ?? budget.spending_left;
-  $("budget-title").textContent = left < 0 ? "本月已超支" : "本月还能花";
+  const left = budget.remaining;
+  $("budget-title").textContent = left < 0 ? "本月日常预算已超支" : "本月日常还能花";
   $("budget-left").textContent = money(Math.abs(left));
   $("budget-status").textContent = budget.unpriced ? budget.unpriced + " 笔退款待核，金额暂计" : "";
   $("budget").classList.toggle("over", left < 0);
-  const used = budget.total - left;
+  const used = budget.spent;
   $("budget-meter").style.width = (budget.total ? Math.min(100, Math.max(0, used / budget.total * 100)) : used > 0 ? 100 : 0) + "%";
   $("budget-equation").textContent = "本月收入 " + money(budget.total) +
-    (used < 0 ? " ＋ 净回款 " : " − 已用生活费 ") + money(Math.abs(used));
+    " − 日常开支 " + money(used);
   $("budget-medical").hidden = !budget.medical;
   $("budget-medical").textContent = "医疗另计 " + money(budget.medical || 0) + " ›";
   $("budget-medical").href = "#" + new URLSearchParams({period: budget.month, bucket: "医疗单列"});
   $("base-amount").value = budget.base / 100;
-  $("budget-lending").value = budget.lending ?? 0;
+  $("budget-lending").value = budget.lending;
+  $("reconciliation-left").textContent = money(budget.reconciliation_remaining);
   $("supplements").innerHTML = budget.supplements.map(s => '<div class="income-item"><div>' +
     escapeHTML(s.label) + " · " + money(s.cents) + (s.trade_id ? " · 已匹配流水" : "") +
     '</div><button class="row-action" data-remove-income="' + escapeHTML(s.id) + '">撤销补记</button></div>').join("");
@@ -328,19 +329,20 @@ function renderOverview(data) {
     $(id + "-count").textContent = group.count + " 笔" + (id === "daily" && out.daily_unpriced ?
       " · " + out.daily_unpriced + " 笔退款待核对" : "");
   }
-  const total = data.groups["已计入"].cents;
+  const total = data.groups["日常生活"].cents;
+  $("category-platform").textContent = $("platform").value || "全平台";
   let offset = 0;
-  const stops = data.categories.map(([name, cents]) => {
+  const stops = data.daily_categories.map(([name, cents]) => {
     const start = offset;
     offset += total ? cents / total * 100 : 0;
     return `${categoryColor(name)} ${start}% ${offset}%`;
   });
   const ring = $("category-ring");
   if (!total) ring.style.background = "var(--line)";
-  else if (stops.length === 1) ring.style.background = categoryColor(data.categories[0][0]);
+  else if (stops.length === 1) ring.style.background = categoryColor(data.daily_categories[0][0]);
   else ring.style.background = `conic-gradient(${stops.join(", ")})`;
   $("ring-total").textContent = money(total);
-  $("categories").innerHTML = bars(data.categories);
+  $("categories").innerHTML = categoryBars(data.daily_categories, "已确认日常");
   $("recent-list").innerHTML = data.rows.slice(0, 5).map(row => tradeRow(row)).join("") || '<p class="hint">当前范围没有交易。</p>';
   $("recent-all").href = rangedHref(new URLSearchParams({page: "details"}));
   $("invested").textContent = money(data.invested);
@@ -368,10 +370,10 @@ function renderOverview(data) {
   ).join("") || '<div class="empty-state compact"><svg class="icon" aria-hidden="true"><use href="#icon-users"/></svg><p>当前范围内没有收到群收款。</p></div>';
   renderDrill();
   const periods = data.months.map(([month, values]) => `
-    <tr><td>${escapeHTML(month)}</td><td class="money">${money(values.paid)}${values.paid_unpriced ? `<small>${values.paid_unpriced} 笔退款待核对</small>` : ""}</td>
-      <td class="money">${money(values.daily)}</td><td class="money">${money(values.invested)}</td></tr>`).join("");
+    <tr><td>${escapeHTML(month)}</td><td class="money">${money(values.daily)}</td><td class="money">${money(values.paid)}${values.paid_unpriced ? `<small>${values.paid_unpriced} 笔退款待核对</small>` : ""}</td>
+      <td class="money">${money(values.invested)}</td></tr>`).join("");
   $("months").innerHTML = periods ? `<div class="table-scroll"><table>
-    <thead><tr><th>月份</th><th class="money">实际支付</th><th class="money">确认日常</th><th class="money">理财买入</th></tr></thead>
+    <thead><tr><th>月份</th><th class="money">日常开支</th><th class="money">实际支付</th><th class="money">理财买入</th></tr></thead>
     <tbody>${periods}</tbody></table></div>` : '<p class="hint">当前范围内没有交易。</p>';
 }
 
@@ -385,15 +387,15 @@ function categoryColor(name) {
   return categoryColors[name] || "#7b8b9c";
 }
 
-function bars(categories, bucket = "已计入") {
+function categoryBars(categories, bucket, showTrack = false) {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
   return categories.map(([name, value]) => `
     <a class="category-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}">
       <i style="background:${categoryColor(name)}" aria-hidden="true"></i><span>${escapeHTML(name)}</span>
       <small>${total ? (100 * value / total).toFixed(1) : "0.0"}%</small>
       <strong>${money(value)}</strong><span class="arrow" aria-hidden="true">›</span>
-      ${bucket === "已确认日常" ? `<span class="daily-track" aria-hidden="true"><i style="width:${total ? 100 * value / total : 0}%;background:${categoryColor(name)}"></i></span>` : ""}
-    </a>`).join("") || '<p class="hint">当前范围没有已计入消费。</p>';
+      ${showTrack ? `<span class="daily-track" aria-hidden="true"><i style="width:${total ? 100 * value / total : 0}%;background:${categoryColor(name)}"></i></span>` : ""}
+    </a>`).join("") || '<p class="hint">当前范围没有对应的开支。</p>';
 }
 
 function sortedRows(rows, mode, amount = row => row.net) {
@@ -424,12 +426,9 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   $("drill-category").replaceChildren(new Option("全部用途", ""), ...Array.from(names).sort().map(n => new Option(n, n)));
   $("drill-category").value = names.has(selectedCategory) ? selectedCategory : "";
   $("drill-title").textContent = daily ? "日常开销明细" : "已计入消费明细";
-  $("daily-chart").hidden = !daily;
-  if (daily) {
-    const totals = new Map();
-    for (const r of rows) totals.set(category(r), (totals.get(category(r)) || 0) + (r.daily_cents ?? r.personal ?? 0));
-    $("daily-bars").innerHTML = bars([...totals].sort((a, b) => b[1] - a[1]), "已确认日常");
-  }
+  $("drill-chart-title").textContent = daily ? "日常开支构成" : "已计入消费构成";
+  $("daily-bars").innerHTML = daily ? categoryBars(state.ledger.daily_categories, "已确认日常", true) :
+    categoryBars(state.ledger.categories, "已计入", true);
   const visible = rows.filter((r) => !$("drill-category").value || category(r) === $("drill-category").value);
   const amount = r => daily ? (r.daily_cents ?? r.personal ?? 0) : r.net;
   $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + amount(r), 0));
@@ -449,13 +448,13 @@ function tradeRow(row, gross = false, dailyView = false) {
   }
   if (row.note) info.push(["备注", row.note]);
   if (row.outflow) info.push(["日常归属", row.daily_choice === "yes" ? "日常" : row.daily_choice === "no" ? "非日常" : "待确认"],
-    ["判断来源", row.daily_lock || (row.manual_daily ? "手动选择" : row.daily_source === "peers" ? "同商户同类商品的人工标记一致" : row.daily_source === "conflict" ? "人工标记有分歧" : row.daily_choice ? "自动初分" : "证据不足")]);
+    ["判断来源", row.daily_lock || (row.manual_daily ? "手动选择" : row.over_daily_cap ? "超过单笔上限，默认非日常" : row.daily_source === "peers" ? "同商户同类商品的人工标记一致" : row.daily_source === "conflict" ? "人工标记有分歧" : row.daily_choice ? "自动初分" : "证据不足")]);
   for (const receipt of row.receipts) info.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
-  if (row.include_over_cap) info.push(["上限例外", "已手动计入"]);
+  if (row.over_daily_cap && row.daily && !row.daily_lock) info.push(["上限例外", "已手动计入"]);
   if (row.group_receipt && row.linked_expense_id) info.push(["关联付款", row.linked_merchant]);
   let edit = "";
   if (row.editable) {
-    edit = `<button class="row-action" data-edit="${row.id}">${row.bucket === "超上限" ? "手动计入…" : "编辑"}</button>`;
+    edit = `<button class="row-action" data-edit="${row.id}">编辑用途</button>`;
   } else if (row.group_receipt) {
     edit = `<button class="row-action" data-receipt="${row.id}">关联付款</button>`;
   }
@@ -537,7 +536,10 @@ function renderDetails() {
   };
   const matching = state.ledger.rows.filter((row) => matchesBucket(row) &&
     (!state.category || (dailyView ? row.daily_category || row.category : row.category) === state.category) && matchesSearch(row));
-  if (state.category) renderMerchants(matching, amount);
+  if (state.category) {
+    $("merchant-amount").textContent = dailyView ? "日常开支" : "个人实付";
+    renderMerchants(matching, amount);
+  }
   const rows = state.merchant === null ? matching : matching.filter(row => merchantLabel(row) === state.merchant);
   $("clear-merchant").hidden = state.merchant === null;
   if (state.merchant !== null) $("clear-merchant").textContent = "清除商户筛选 · " + state.merchant + " ×";
@@ -554,7 +556,7 @@ function renderDetails() {
     return heading + tradeRow(row, gross, dailyView);
   }).join("") || '<p class="hint">没有符合条件的交易。</p>';
   $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "医疗单列" || bucket === "实际支付" ?
-    (gross ? " · 原付合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
+    (gross ? " · 原付合计 " : dailyView ? " · 日常开支合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
   if (bucket === "实际支付") {
     const unpriced = rows.filter(row => row.personal === null).length;
     if (unpriced) $("row-count").textContent += " · " + unpriced + " 笔退款待核对，暂未计入";
@@ -565,6 +567,11 @@ function renderDetails() {
   $("page-number").textContent = state.listPage + " / " + pages;
 }
 
+function setExceptionVisibility(row) {
+  $("exception-field").hidden = !state.ledger.over_cap_categories.includes($("category").value) ||
+    !(row.over_daily_cap || row.include_over_cap);
+}
+
 function openEditor(id) {
   const row = state.ledger.rows.find((item) => item.id === id);
   state.editId = id;
@@ -572,8 +579,9 @@ function openEditor(id) {
   $("category").replaceChildren(...state.ledger.choices.map((item) => new Option(item, item)));
   $("category").value = row.category;
   $("note").value = row.note;
-  $("exception-field").hidden = row.category === "医疗" || (row.net <= state.ledger.cap && !row.include_over_cap);
-  $("exception").checked = row.category !== "医疗" && (Boolean(row.include_over_cap) || row.bucket === "超上限");
+  setExceptionVisibility(row);
+  $("exception").defaultChecked = row.over_daily_cap ? row.daily && !row.daily_lock : Boolean(row.include_over_cap && row.daily);
+  $("exception").checked = $("exception").defaultChecked;
   $("edit-error").textContent = "";
   $("rule").value = "keep";
   $("rule").disabled = !row.merchant || row.merchant === "/";
@@ -830,16 +838,13 @@ function bindLedger() {
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) $(id).close();
     });
   }
-  on("category", "change", () => {
-    const row = state.ledger.rows.find(r => r.id === state.editId);
-    const medical = $("category").value === "医疗";
-    $("exception-field").hidden = medical || (row.net <= state.ledger.cap && !row.include_over_cap);
-    if (medical) $("exception").checked = false;
-  });
+  on("category", "change", () => setExceptionVisibility(state.ledger.rows.find(r => r.id === state.editId)));
   on("edit-form", "submit", async () => {
     try {
       await post("/api/annotate", { id: state.editId, category: $("category").value,
-        note: $("note").value, rule: $("rule").value, include_over_cap: $("exception").checked });
+        note: $("note").value, rule: $("rule").value,
+        include_over_cap: !$("exception-field").hidden && $("exception").checked !== $("exception").defaultChecked
+          ? $("exception").checked : null });
     } catch (error) {
       $("edit-error").textContent = error.message;
       return;

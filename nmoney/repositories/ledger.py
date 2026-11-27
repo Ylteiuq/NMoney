@@ -82,7 +82,7 @@ class LedgerRepository:
         self.conn.execute("INSERT OR IGNORE INTO included_exceptions VALUES (?)", (trade_id,))
 
     def remove_exception(self, trade_id):
-        self.conn.execute("DELETE FROM included_exceptions WHERE trade_id=?", (trade_id,))
+        return self.conn.execute("DELETE FROM included_exceptions WHERE trade_id=?", (trade_id,)).rowcount
 
     def set_merchant_rule(self, platform, merchant, category):
         self.conn.execute("""

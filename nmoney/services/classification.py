@@ -55,7 +55,7 @@ def classify(repo, start, end, apply=False):
     preferences = {}
     for row in rows:
         key = preference_key(row)
-        if key and row["manual_daily"] in ("yes", "no") and not row["daily_lock"]:
+        if key and row["manual_daily"] in ("yes", "no") and not row["daily_lock"] and not row["over_daily_cap"]:
             preferences.setdefault(key, Counter())[row["manual_daily"]] += 1
     stats = Counter(manual_labels=len(manual), outflows=len(rows), clusters=sum(len(g) > 1 for g in groups))
     for group in groups:
@@ -76,7 +76,7 @@ def classify(repo, start, end, apply=False):
             choice = daily_default(category)
             votes = preferences.get(preference_key(row), {})
             source = None
-            if row["daily_lock"]:
+            if row["daily_lock"] or row["over_daily_cap"]:
                 choice = "no"
             elif len(votes) > 1:
                 choice, source = None, "conflict"
