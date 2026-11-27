@@ -2,12 +2,17 @@
 
 import io
 import json
+import socket
 import tempfile
 import unittest
+from http.client import HTTPResponse
 from pathlib import Path
+from threading import Thread
+from wsgiref.simple_server import WSGIRequestHandler
 from wsgiref.util import setup_testing_defaults
 
 from app import application
+from nmoney.http.server import LocalWSGIServer
 from nmoney.ledger import initialize
 
 
@@ -36,6 +41,32 @@ class HttpContractTest(unittest.TestCase):
         self.assertEqual(headers["Content-Length"], str(len(data)))
         self.assertEqual(headers["Cache-Control"], "no-store")
         return status, headers["Content-Type"], data
+
+    def test_idle_browser_connection_does_not_block_ping(self):
+        # 用两对已连接的套接字模拟 accept 的结果，无需占用本机账本端口。
+        with LocalWSGIServer(("127.0.0.1", 8765), WSGIRequestHandler, bind_and_activate=False) as server:
+            server.server_name, server.server_port = server.server_address
+            server.setup_environ()
+            server.set_app(self.app)
+            idle_server, idle_browser = socket.socketpair()
+            page_server, page_browser = socket.socketpair()
+
+            def dispatch():
+                for connection in (idle_server, page_server):
+                    server.process_request(connection, ("127.0.0.1", 30000))
+
+            dispatcher = Thread(target=dispatch, daemon=True)
+            try:
+                with idle_browser, page_browser:
+                    dispatcher.start()
+                    page_browser.settimeout(2)
+                    page_browser.sendall(b"GET /api/ping HTTP/1.0\r\nHost: 127.0.0.1:8765\r\n\r\n")
+                    with HTTPResponse(page_browser) as response:
+                        response.begin()
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.load(response)["database"], str(self.path.resolve()))
+            finally:
+                dispatcher.join(2)
 
     def test_host_then_route_then_write_header(self):
         stream = {"wsgi.input": UnreadableBody()}

@@ -1,100 +1,204 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
   <title>NMoney · 个人账本</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <aside>
-    <div class="brand"><span class="mark" aria-hidden="true">N</span>NMoney</div>
-    <nav aria-label="账本导航">
-      <button data-page="overview" aria-current="page">收支概览</button>
-      <button data-page="details">交易明细</button>
-      <button data-page="clusters">相似支出</button>
-      <button data-page="imports">导入账单</button>
-    </nav>
-  </aside>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-clusters" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="m8 7.3 2.8 8.2M16 7.3l-2.8 8.2M8.5 6h7"/></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-4 4 4-4 4 4M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="icon-wallet" viewBox="0 0 24 24"><path d="M4 7V6a2 2 0 0 1 2-2h12v4M4 7h15a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V8a1 1 0 0 1 1-1Z"/><path d="M15 12h5v5h-5a2.5 2.5 0 0 1 0-5Z"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 4a4 4 0 0 1 0 8m2 3a5 5 0 0 1 3 5"/></symbol>
+    <symbol id="icon-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-9M16 6h5v5"/></symbol>
+    <symbol id="icon-meal" viewBox="0 0 24 24"><path d="M5 3v5a3 3 0 0 0 6 0V3M8 3v18m11 0V3c-3 2-4 6-4 11h4"/></symbol>
+    <symbol id="icon-bag" viewBox="0 0 24 24"><path d="M4 8h16l-1 13H5L4 8Zm4 0V6a4 4 0 0 1 8 0v2"/></symbol>
+    <symbol id="icon-health" viewBox="0 0 24 24"><path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z"/></symbol>
+    <symbol id="icon-transit" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 11h14M9 14h1m4 0h1M8 18l-3 3m11-3 3 3"/></symbol>
+    <symbol id="icon-ticket" viewBox="0 0 24 24"><path d="M3 6h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM15 6v2m0 3v2m0 3v2"/></symbol>
+    <symbol id="icon-transfer" viewBox="0 0 24 24"><path d="M3 8h17m-4-4 4 4-4 4M21 16H4m4-4-4 4 4 4"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#overview" aria-label="NMoney 首页"><img src="/favicon.svg" width="32" height="32" alt="">NMoney</a>
+      <nav aria-label="账本导航">
+        <button data-page="overview" aria-current="page"><span>收支概览</span></button>
+        <button data-page="details"><span>交易明细</span></button>
+        <button data-page="clusters"><span>相似支出</span></button>
+        <button data-page="imports"><svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg><span>导入账单</span></button>
+      </nav>
+    </div>
+  </header>
   <main>
-    <a id="back-overview" href="#overview" hidden>← 收支概览</a>
-    <header><h1 id="title" tabindex="-1">收支概览</h1><span class="local">本地账本</span></header>
+    <a id="back-overview" href="#overview" hidden>‹ 返回收支概览</a>
+    <div class="page-header">
+      <h1 id="title" tabindex="-1">收支概览</h1>
+      <section id="filters" class="toolbar" aria-label="统计范围">
+        <label><span class="sr-only">时间范围</span><select id="period"><option value="current" selected>本月</option><option value="">全部日期</option><option value="custom">自选日期</option></select></label>
+        <div id="custom-dates" class="dates" hidden><label>从<input type="date" id="start"></label><label>至<input type="date" id="end"></label></div>
+        <label><span class="sr-only">支付平台</span><select id="platform"><option value="">全部平台</option><option>微信</option><option>支付宝</option></select></label>
+        <details id="cap-control"><summary>单笔上限</summary><form id="cap-form"><label>单笔计入上限（元）<input id="cap" type="number" min="0" step="0.01" required></label><button class="action">应用</button></form></details>
+      </section>
+    </div>
     <p id="notice" role="status" hidden></p>
-    <p id="sync-info" class="hint" hidden>当前服务已在更新前启动。日常标记先保存在此浏览器，下次重启服务后用此浏览器打开账本，即会同步到 SQLite。</p>
-    <section id="filters" class="toolbar" aria-label="统计范围">
-      <label>时间范围<select id="period"><option value="current" selected>本月</option><option value="">全部日期</option><option value="custom">自选日期</option></select></label>
-      <div id="custom-dates" class="dates" hidden>
-        <label>从<input type="date" id="start"></label><label>至<input type="date" id="end"></label>
-      </div>
-      <label>支付平台<select id="platform"><option value="">全部平台</option><option>微信</option><option>支付宝</option></select></label>
-      <form id="cap-form"><label>单笔上限（元）<input id="cap" type="number" min="0" step="0.01" required></label><button class="quiet">应用</button></form>
-    </section>
     <section id="overview">
-      <section class="reconciliation" aria-label="支出对账">
-        <div><h2>实际支付（不含理财）</h2><strong id="outflow-total">—</strong></div>
-        <div class="reconcile-notes"><p id="outflow-equation"></p><p id="payment-scope"></p><a id="all-outflows" href="#bucket=实际支付">查看实付明细 →</a></div>
-      </section>
-      <div class="cards">
-        <button class="card primary clickable" id="open-daily" aria-expanded="false" aria-controls="drill"><h2>日常开销 <span>⌄</span></h2><strong id="daily">—</strong><small id="daily-count"></small></button>
-        <button class="card clickable" id="open-review"><h2>日常归属待确认 <span>↗</span></h2><strong id="review-count">—</strong><small>逐笔划分</small></button>
-        <button class="card clickable" id="open-included" aria-expanded="false" aria-controls="drill"><h2>按用途计入的消费 <span>⌄</span></h2><strong id="included">—</strong><small id="included-count"></small></button>
-        <button class="card clickable" id="open-over"><h2>超上限 <span>↗</span></h2><strong id="over">—</strong><small id="over-count"></small></button>
+      <div class="account-panels">
+        <section class="panel budget" id="budget" hidden aria-labelledby="budget-title">
+          <div class="budget-summary">
+            <div class="panel-heading"><h2 id="budget-title">本月日常还能花</h2><span class="hint" id="budget-period"></span></div>
+            <div class="budget-line"><strong id="budget-left"></strong><span id="budget-status"></span></div>
+            <p id="budget-equation"></p>
+            <div class="budget-progress"><div class="budget-track" aria-hidden="true"><i id="budget-meter"></i></div><span id="budget-usage"></span></div>
+          </div>
+          <button type="button" class="disclosure" id="open-budget" aria-haspopup="dialog" aria-controls="overview-sheet">收入明细与预算设置<span class="arrow" aria-hidden="true">›</span></button>
+        </section>
+        <section class="statement" aria-label="支出对账">
+          <h2>账单核对</h2>
+          <div class="account-actions">
+            <button id="open-daily" aria-haspopup="dialog" aria-controls="overview-sheet">
+              <svg class="icon" aria-hidden="true"><use href="#icon-wallet"/></svg>
+              <span>日常开支 <small id="daily-count"></small></span><strong id="daily">—</strong><span class="arrow" aria-hidden="true">›</span>
+            </button>
+            <button id="open-review">
+              <svg class="icon" aria-hidden="true"><use href="#icon-clusters"/></svg>
+              <span>日常归属待确认</span><strong id="review-count">—</strong><span class="arrow" aria-hidden="true">›</span>
+            </button>
+          </div>
+          <button type="button" class="disclosure" id="open-audit" aria-haspopup="dialog" aria-controls="overview-sheet">查看支付流水对账<span class="arrow" aria-hidden="true">›</span></button>
+        </section>
       </div>
-      <section id="drill" class="panel drill" hidden>
-        <div class="panel-heading"><h2 id="drill-title"></h2><button id="fold-drill" class="quiet">收起</button></div>
-        <div id="daily-chart" hidden><h3>日常生活构成</h3><div id="daily-bars"></div></div>
-        <div class="detail-filters"><label>排序<select id="drill-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
-        <label>用途<select id="drill-category"></select></label><output id="drill-total"></output></div>
-        <div class="table-scroll drill-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th><th>统计状态</th><th class="money">个人实付</th><th>操作</th></tr></thead><tbody id="drill-trades"></tbody></table></div>
-      </section>
+
       <div class="panels">
-        <section class="panel"><h2>已计入消费构成</h2><div id="categories"></div><button id="open-pending" class="row-action">查看用途待分类的付款</button></section>
-        <section class="panel"><h2>按月统计</h2><div id="months"></div></section>
+        <section class="panel category-panel"><div class="panel-heading"><h2>日常开支构成</h2><span class="hint" id="category-platform"></span></div>
+          <div class="category-layout"><div id="category-ring" class="ring" aria-hidden="true"><div><small id="ring-label">日常开支</small><strong id="ring-total"></strong></div></div><div id="categories"></div></div>
+        </section>
+        <section class="panel"><div class="panel-heading"><h2>最近交易</h2><a id="recent-all" href="#details">全部明细 ›</a></div><div id="recent-list"></div></section>
+        <section class="panel month-panel"><div class="panel-heading"><h2>按月统计</h2></div><div id="months"></div></section>
         <section class="panel"><div class="panel-heading"><h2>理财买入</h2><strong class="money" id="invested"></strong></div><div id="funds"></div></section>
-        <section class="panel"><div class="panel-heading"><h2>群收款分摊</h2><span class="hint" id="aa-count"></span></div><div id="aa-list"></div></section>
+        <section class="panel aa-panel"><div class="panel-heading"><h2>群收款分摊</h2><span class="hint" id="aa-count"></span></div><div id="aa-list"></div></section>
       </div>
-      <p class="hint">实际支付按原付款日期归属。日常开销只汇总已标为日常的个人实付，归属可以逐笔调整。</p>
     </section>
+
     <section id="details" hidden>
-      <div class="detail-filters">
-        <label class="search">关键词搜索<input id="search" type="search" placeholder="搜商户、商品、金额或备注，可用空格组合"></label>
-        <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>实际支付</option><option value="全部支出">原付流水（含理财）</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></optgroup></select></label>
-        <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
+      <div class="panel details-panel">
+        <div class="detail-filters">
+          <label class="search"><span>关键词搜索</span><span class="search-input"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="search" type="search" placeholder="搜索商户、商品、金额或备注"></span></label>
+          <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>实际支付</option><option value="全部支出">原付流水（含理财）</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>医疗单列</option><option>非消费</option></optgroup></select></label>
+          <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
+        </div>
+        <p id="row-count" class="table-meta" aria-live="polite"></p>
+        <div class="ledger-columns" aria-hidden="true"><span>交易对方 / 商品</span><span>支付平台 / 时间</span><span>金额</span></div>
+        <div id="trades" class="bill-list"></div>
+        <div id="pager" class="pager" hidden><button id="previous" class="quiet">上一页</button><span id="page-number"></span><button id="next" class="quiet">下一页</button></div>
       </div>
       <details id="merchant-summary" class="panel" hidden>
-        <summary>按商户汇总</summary>
-        <div class="table-scroll"><table><thead><tr><th>商户</th><th class="money">笔数</th><th class="money">个人实付</th></tr></thead><tbody id="merchant-list"></tbody></table></div>
+        <summary>按商户汇总<svg class="icon" aria-hidden="true"><use href="#icon-chevron"/></svg></summary>
+        <div class="table-scroll"><table><thead><tr><th>商户</th><th class="money">笔数</th><th id="merchant-amount" class="money">个人实付</th></tr></thead><tbody id="merchant-list"></tbody></table></div>
       </details>
       <button id="clear-merchant" class="quiet" hidden></button>
-      <p id="row-count" class="hint" aria-live="polite"></p>
-      <div class="table-scroll"><table><thead><tr><th>交易时间</th><th>交易对方 / 商品</th><th>用途</th><th>统计状态</th><th class="money">金额 / 实付</th><th>操作</th></tr></thead><tbody id="trades"></tbody></table></div>
-      <div id="pager" class="pager" hidden><button id="previous" class="quiet">上一页</button><span id="page-number"></span><button id="next" class="quiet">下一页</button></div>
     </section>
+
     <section id="clusters" hidden>
-      <div class="panel-heading"><h2>按相似度分组</h2><span id="cluster-count" class="hint"></span></div>
-      <p class="hint">模型在本机根据商户、商品文字和金额分组。展开核对后，可逐笔修改或一次确认整组中的待确认项。</p>
+      <div class="section-intro"><div><h2>按相似度分组</h2></div><span id="cluster-count" class="hint"></span></div>
+      <label class="cluster-filter"><input type="checkbox" id="review-only" checked>只看日常归属待确认</label>
       <div id="cluster-list"></div>
     </section>
+
     <section id="imports" hidden>
-      <section class="panel upload"><h2>选择账单文件</h2>
-        <p>支持微信支付 XLSX 和支付宝 CSV。压缩包请先解压，可以一次选择多份。</p>
-        <form id="import-form"><label class="filebox">账单文件<input id="files" type="file" accept=".csv,.xlsx" multiple required></label>
-        <button class="action" id="upload">导入所选文件</button></form>
+      <section class="panel upload">
+        <h2>导入交易明细</h2><p>选择解压后的微信 XLSX 或支付宝 CSV 文件，可一次导入多份。</p>
+        <form id="import-form"><label class="filebox" id="file-drop"><input id="files" type="file" accept=".csv,.xlsx" multiple><svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg><strong id="file-label">选择账单文件</strong><span id="file-hint">支持多选，也可以分次添加或拖入</span></label>
+        <div id="selected-files" class="selected-files" hidden></div><button class="action" id="upload" disabled>导入所选文件</button></form>
         <div id="import-results" role="status"></div>
+        <p class="hint">相同订单自动去重。重新导入会保留手工用途和备注。</p>
       </section>
-      <p class="hint">日期可以重叠。同一平台的同一订单只保留一笔，再次导入会保留你填写的用途和备注。</p>
     </section>
   </main>
+
+  <dialog class="sheet" id="overview-sheet" aria-labelledby="sheet-title">
+    <header class="sheet-heading"><div><h2 id="sheet-title"></h2><small id="sheet-range"></small></div>
+      <button type="button" class="icon-button" data-dismiss aria-label="关闭面板" autofocus><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </header>
+    <div class="sheet-scroll" id="sheet-scroll">
+      <section id="budget-manage" hidden>
+        <div class="sheet-tabs" role="tablist" aria-label="预算设置">
+          <button type="button" role="tab" id="tab-income" aria-controls="pane-income" aria-selected="true" tabindex="0">生活费与收入</button>
+          <button type="button" role="tab" id="tab-transfers" aria-controls="pane-transfers" aria-selected="false" tabindex="-1">账单转入</button>
+          <button type="button" role="tab" id="tab-loans" aria-controls="pane-loans" aria-selected="false" tabindex="-1">借款与对账</button>
+        </div>
+        <section id="pane-income" role="tabpanel" aria-labelledby="tab-income">
+          <div class="amount-block"><span>本月收入</span><strong id="sheet-income"></strong></div>
+          <section class="sheet-section"><h3>基础生活费</h3>
+            <form id="base-form" class="budget-form"><label>本月额度（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
+          </section>
+          <section class="sheet-section"><h3>手工补记收入</h3><div id="supplements"></div>
+            <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="action">添加收入</button></form>
+          </section>
+        </section>
+        <section id="pane-transfers" role="tabpanel" aria-labelledby="tab-transfers" hidden>
+          <h3 class="sr-only">账单转入</h3><div id="budget-incomes"></div>
+        </section>
+        <section id="pane-loans" role="tabpanel" aria-labelledby="tab-loans" hidden>
+          <section class="sheet-section"><h3>借出与还款</h3><div id="budget-loans"></div></section>
+          <section class="sheet-section"><h3>其他付款对账</h3><a id="budget-medical" hidden></a>
+            <label class="loan-control">借款本金处理<select id="budget-lending"><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
+            <dl class="sheet-facts"><div><dt>扣除医疗以外付款后的余额</dt><dd id="reconciliation-left"></dd></div></dl>
+          </section>
+        </section>
+      </section>
+      <section id="payment-audit" class="payment-audit" hidden>
+        <div class="balance">
+          <div><h2>实际支付 <small>不含理财</small></h2>
+            <strong id="outflow-total">—</strong>
+            <div class="balance-links"><a id="all-outflows" href="#bucket=实际支付">实付明细 ›</a><span id="coverage"></span></div>
+          </div>
+          <dl id="outflow-equation" aria-label="实付金额计算"></dl>
+        </div>
+        <p id="payment-scope"></p>
+        <div class="metrics">
+          <button id="open-included" aria-controls="drill"><span>已计入消费 ›</span><strong id="included">—</strong><small id="included-count"></small></button>
+          <button id="open-over"><span>超上限 ›</span><strong id="over">—</strong><small id="over-count"></small></button>
+        </div>
+        <button id="open-pending" class="text-link">查看用途待分类的付款 ›</button>
+      </section>
+      <section id="drill" hidden>
+        <button type="button" class="text-link" id="back-audit" hidden>‹ 返回支付流水对账</button>
+        <details class="sheet-disclosure"><summary id="drill-chart-title">分类构成</summary><div id="daily-bars"></div></details>
+        <div class="detail-filters drill-filters"><label>排序<select id="drill-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
+        <label>用途<select id="drill-category"></select></label><output id="drill-total"></output></div>
+        <div id="drill-trades" class="bill-list"></div>
+      </section>
+      <section id="fund-orders" hidden><div class="amount-block"><span id="fund-name"></span><strong id="fund-total"></strong></div><div id="fund-list" class="bill-list"></div></section>
+    </div>
+    <p class="sheet-notice" role="status" hidden></p>
+  </dialog>
+  <dialog class="sheet" id="trade-sheet" aria-labelledby="trade-sheet-title">
+    <header class="sheet-heading"><h2 id="trade-sheet-title">交易详情</h2>
+      <button type="button" class="icon-button" data-dismiss aria-label="关闭面板" autofocus><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </header>
+    <div class="sheet-scroll" id="trade-content"></div>
+    <p class="sheet-notice" role="status" hidden></p>
+  </dialog>
+
   <dialog id="editor"><form id="edit-form">
-    <h2>编辑交易用途</h2><p id="trade-label"></p>
+    <div class="dialog-heading"><div><h2>编辑交易用途</h2></div><button type="button" id="dialog-close" class="icon-button" aria-label="关闭编辑窗口"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><p id="trade-label"></p>
     <label>用途<select id="category"></select></label>
-    <label id="exception-field" class="check" hidden><input id="exception" type="checkbox">这笔消费即使超上限也计入</label>
+    <label id="exception-field" class="check" hidden><input id="exception" type="checkbox">这笔超限消费计入日常开支</label>
     <label>我的备注<textarea id="note" rows="3" placeholder="例如：朋友借款，尚未归还"></textarea></label>
     <label>同名商户<select id="rule"><option value="keep">仅修改这一笔</option><option value="set">同平台同名商户使用这个分类</option><option value="remove">移除这个商户的分类规则</option></select></label>
     <small id="rule-info"></small><p id="edit-error" class="error" role="alert"></p>
-    <div class="actions"><button type="button" id="close" class="quiet">取消</button><button class="action">保存</button></div>
+    <div class="actions"><button type="button" id="close" class="quiet">取消</button><button class="action">保存修改</button></div>
   </form></dialog>
-  <dialog id="aa-editor"><form id="aa-form"><h2>关联群收款</h2><p id="aa-label"></p>
+  <dialog id="aa-editor"><form id="aa-form"><div class="dialog-heading"><div><h2>关联群收款</h2></div><button type="button" id="aa-dialog-close" class="icon-button" aria-label="关闭关联窗口"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><p id="aa-label"></p>
     <label>对应的原付款<select id="aa-target"></select></label>
     <small>可关联其他日期或平台的付款。解除关联后会恢复原金额。</small>
     <p id="aa-error" class="error" role="alert"></p>

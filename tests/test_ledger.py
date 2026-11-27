@@ -165,7 +165,7 @@ class LedgerTest(unittest.TestCase):
             self.fetch("/api/aa", {"receipt_id": ids[friend], "expense_id": ids["meal"]})
         month = self.fetch("/api/ledger", query=november)
         self.assertEqual(month["groups"]["已计入"], {"count": 1, "cents": 3732})
-        self.assertEqual(month["groups"]["日常生活"]["count"], 0)
+        self.assertEqual(month["groups"]["日常生活"]["count"], 1)
         self.fetch("/api/daily", {"ids": [ids["meal"]], "choice": "yes"})
         month = self.fetch("/api/ledger", query=november)
         self.assertEqual(month["groups"]["日常生活"]["cents"], 3732)
@@ -179,6 +179,10 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(candidates[0]["id"], ids["meal"])
         self.fetch("/api/aa", {"receipt_id": ids["B"], "expense_id": ids["other"]})
         self.fetch("/api/aa", {"receipt_id": ids["A"], "expense_id": None})
+        # 回款解除后个人实付重新超限，先前的手动日常决定仍然有效。
+        after_unlink = self.fetch("/api/ledger", query=november)
+        self.assertEqual(after_unlink["groups"]["日常生活"]["cents"], 11200)
+        self.fetch("/api/daily", {"ids": [ids["meal"]], "choice": "no"})
         before_override = self.fetch("/api/ledger", query=november)
         self.assertEqual(before_override["known_over_cap"], 11200)
         self.assertEqual(before_override["deducted_receipts"], 0)
@@ -222,7 +226,7 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(data["funds"], [["甲基金", {"count":2, "cents":20000}]])
         self.assertEqual(data["months"][0][1]["invested"],data["invested"])
         self.assertEqual(dict(data["categories"]), {"美团":485,"餐饮":922})
-        self.assertEqual(data["groups"]["日常生活"]["cents"],0)
+        self.assertEqual(data["groups"]["日常生活"]["cents"],922)
         self.assertEqual(data["outflow"]["cents"],21407)
         self.assertEqual(data["payments"]["cents"], 1407)
         self.assertEqual([r["payment"] for r in data["rows"] if r["fund"]], [False, False])
@@ -246,7 +250,7 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(dict(state["categories"]), {"餐饮": 1000, "日用": 2000, "休闲": 1000})
         self.fetch("/api/daily", {"ids": [ids["a"]], "choice": "yes"})
         self.mark(rows["a"], "数码")
-        self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 1000)
+        self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 3000)
 
     def test_all_outflows_and_independent_daily_choices(self):
         self.upload("支付宝.csv", alipay([("advance", "其他", "630.00", "交易成功"),
@@ -261,25 +265,25 @@ class LedgerTest(unittest.TestCase):
         def choose(names, choice, **extra):
             return self.fetch("/api/daily", {"ids": [rows[n]["id"] for n in names], "choice": choice, **extra})
         choose(["advance"], "no")
-        self.assertEqual(choose(["advance", "refunded", "partial", "uncertain"], "yes", pending_only=True)["changed"], 3)
+        self.assertEqual(choose(["advance", "refunded", "partial", "uncertain"], "yes", pending_only=True)["changed"], 1)
         data = self.fetch("/api/ledger")
         self.assertEqual(data["outflow"], dict(cents=65300, count=4, pending=0, daily_unpriced=1, extra_invested=0))
         self.assertEqual(data["payments"], dict(count=4, gross=65300, cents=63550, refunds=1250, repaid=0,
                                                 unpriced=1, unpriced_gross=500))
         month = data["months"][0][1]
         self.assertEqual((month["paid"], month["paid_unpriced"]), (63550, 1))
-        self.assertEqual(data["groups"]["日常生活"], dict(count=3, cents=550))
-        choose(["advance"], "yes")
+        self.assertEqual(data["groups"]["日常生活"], dict(count=2, cents=550))
+        self.fetch("/api/daily", {"ids":[advance["id"]],"choice":"yes"}, status="400 Bad Request")
         choose(["partial"], None)
         self.add_trades(Transaction("支付宝","advance","2026-11-08 12:30:00","甲商户","商品","其他","支出",63000,"交易成功"))
         self.app = application(self.path)
         data = self.fetch("/api/ledger")
-        self.assertEqual(data["groups"]["日常生活"]["cents"], 63000)
+        self.assertEqual(data["groups"]["日常生活"]["cents"], 0)
         self.assertEqual(data["outflow"]["pending"], 1)
         self.assertEqual(data["outflow"]["cents"], 65300)
         self.assertEqual(next(r for r in data["rows"] if r["id"] == advance["id"])["category"], "代付待回款")
         self.fetch("/api/daily", {"ids": [advance["id"],rows["closed"]["id"]], "choice":"no"}, status="400 Bad Request")
-        self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 63000)
+        self.assertEqual(self.fetch("/api/ledger")["groups"]["日常生活"]["cents"], 0)
 
     def test_initial_classification_preserves_manual_edits_and_uncertain_orders(self):
         from nmoney.trial import first_pass
@@ -295,7 +299,7 @@ class LedgerTest(unittest.TestCase):
             with database(self.path) as conn:
                 return first_pass(conn, "2026-11-01", "2026-11-30", apply)
         self.assertEqual(trial(False)["yes"], 3)
-        self.assertEqual(self.fetch("/api/ledger")["outflow"]["pending"], 5)
+        self.assertEqual(self.fetch("/api/ledger")["outflow"]["pending"], 2)
         trial(True)
         current = self.fetch("/api/ledger")
         c = next(r for r in current["rows"] if r["order_id"] == "c")
@@ -317,3 +321,181 @@ class LedgerTest(unittest.TestCase):
         state = self.fetch("/api/ledger")
         self.assertEqual(state["groups"]["超上限"]["cents"], 33500)
         self.assertEqual((state["known_spending"], state["known_over_cap"]), (13500, 13500))
+
+    def test_monthly_budget_separates_cash_from_consumption_and_savings(self):
+        def tx(order, cents, category, direction, merchant, product, status):
+            return Transaction("支付宝", order, "2026-11-10 11:00:00", merchant, product, category, direction, cents, status)
+        ids = self.add_trades(
+            tx("member", 63000, "其他", "支出", "商家", "会员订阅", "交易成功"),
+            tx("loan", 47800, "转账", "支出", "同学", "/", "交易成功"),
+            tx("base", 200000, "转账", "收入", "家人", "生活费", "已到账"),
+            tx("wages", 70000, "转账", "收入", "商家", "劳务费", "已到账"),
+            tx("sale", 8000, "收入", "收入", "买家", "闲鱼卖笔", "等待对方确认收货"),
+            tx("unknown", 20000, "转账", "收入", "同学", "/", "已到账"),
+            tx("aa", 2200, "群收款", "收入", "朋友", "/", "已到账"),
+            tx("refund", 3000, "退款", "收入", "商家", "/", "退款成功"),
+            tx("fund", 20000, "投资理财", "不计收支", "蚂蚁财富", "基金-买入", "交易成功"))
+        self.mark({"id": ids["loan"]}, "借出")
+        query = {"budget_month":"2026-11", "platform":"微信"}
+        def budget():
+            return self.fetch("/api/ledger", query=query)["budget"]
+        report = budget()
+        self.assertEqual((report["total"], report["spent"], report["lent"]), (270000, 0, 47800))
+        self.assertEqual((report["remaining"], report["cash_left"], report["spending_left"]), (270000,159200,207000))
+        self.assertEqual(len(report["incomes"]),4)
+        self.assertEqual({r["order_id"] for r in report["incomes"]}, {"base","wages","sale","unknown"})
+        manual = {"month":"2026-11", "id":"bank", "label":"银行卡劳务", "cents":70000}
+        for _ in range(2):
+            self.fetch("/api/budget/supplement", manual)
+        self.assertEqual((budget()["manual"],budget()["extra"]), (70000,0))
+        self.fetch("/api/budget/income", {"id":ids["wages"],"kind":"matched","supplement_id":"bank"})
+        self.fetch("/api/budget/income", {"id":ids["aa"],"kind":"extra"}, status="400 Bad Request")
+        self.fetch("/api/budget/income", {"id":ids["unknown"],"kind":"matched","supplement_id":"bank"}, status="400 Bad Request")
+        self.fetch("/api/budget/lending", {"value":1})
+        self.assertEqual((budget()["remaining"],budget()["reconciliation_remaining"]), (270000,159200))
+        self.fetch("/api/budget/lending", {"value":0})
+        self.assertEqual((budget()["remaining"],budget()["reconciliation_remaining"]), (270000,207000))
+        self.fetch("/api/budget/base", {"month":"2026-11","cents":180000})
+        self.assertEqual(budget()["remaining"],250000)
+        self.fetch("/api/budget/supplement", dict(manual,cents=None))
+        self.assertEqual((budget()["extra"],budget()["manual"]), (70000,0))
+        self.fetch("/api/budget/income", {"id":ids["sale"],"kind":"extra"})
+        self.assertEqual(budget()["remaining"],250000)
+        # 同一订单的较新快照确认收货，卖货款只在这时候进入可用额度。
+        with database(self.path) as conn:
+            updated = tx("sale", 8000, "收入", "收入", "买家", "闲鱼卖笔", "交易成功")
+            import_statement(conn, Statement("支付宝", "2026-12-04", [updated]))
+        self.assertEqual(budget()["remaining"],258000)
+        self.assertEqual(self.fetch("/api/ledger", query={"budget_month":"2026-12"})["budget"]["remaining"],200000)
+
+    def test_daily_budget_chart_and_details_follow_manual_overrides(self):
+        def pay(order, amount, category, platform="支付宝"):
+            return Transaction(platform, order, "2026-11-10 12:00:00", order, category, category, "支出", amount, "交易成功")
+        trades = [pay("regular", 1250, "餐饮美食"), pay("gift", 20000, "生日"), pay("pen", 25900, "日用百货"),
+                  pay("member", 63000, "订阅", "微信"), pay("extra", 3700, "电影票")]
+        ids = self.add_trades(*trades)
+        # 历史版本分别保存了上限例外和日常手动选择，升级后都应生效。
+        with database(self.path) as conn:
+            conn.execute("INSERT INTO included_exceptions VALUES (?)", (ids["gift"],))
+            conn.execute("INSERT INTO daily_choices VALUES (?, 'yes')", (ids["pen"],))
+        query = {"start": "2026-11-01", "end": "2026-11-30", "budget_month": "2026-11"}
+        def report(**filters):
+            return self.fetch("/api/ledger", query=dict(query, **filters))
+        def assert_totals(cents, count):
+            data = report()
+            self.assertEqual(data["budget"]["spent"], cents)
+            self.assertEqual(data["budget"]["remaining"], data["budget"]["total"] - cents)
+            self.assertEqual(data["groups"]["日常生活"], {"cents": cents, "count": count})
+            self.assertEqual(dict(data["months"])["2026-11"]["daily"], cents)
+            details = {}
+            for row in data["rows"]:
+                if row["daily"]:
+                    name = row["daily_category"]
+                    details[name] = details.get(name, 0) + row["daily_cents"]
+            self.assertEqual(dict(data["daily_categories"]), details)
+            self.assertEqual(sum(details.values()), cents)
+        assert_totals(47150, 3)
+        self.fetch("/api/daily", {"ids": [ids[k] for k in ("gift", "pen", "member")], "choice": "yes"})
+        self.add_trades(*trades)
+        self.app = application(self.path)
+        assert_totals(110150, 4)
+        wechat = report(platform="微信")
+        self.assertEqual(wechat["daily_categories"], [["会员订阅", 63000]])
+        self.assertEqual(wechat["budget"]["spent"], 110150)
+        self.fetch("/api/daily", {"ids": [ids["gift"]], "choice": None})
+        assert_totals(90150, 3)
+        gift = next(r for r in report()["rows"] if r["id"] == ids["gift"])
+        self.assertIsNone(gift["daily_choice"])
+        self.fetch("/api/daily", {"ids": [ids["pen"]], "choice": "no"})
+        assert_totals(64250, 2)
+
+    def test_import_defaults_and_manual_review(self):
+        ids = self.add_trades(
+            Transaction("支付宝","meal","2026-11-10 18:00:00","刘成政餐饮店","晚餐","餐饮美食","支出",1450,"交易成功"),
+            Transaction("支付宝","fund","2026-11-10 18:00:00","蚂蚁财富","某基金-定投","投资理财","不计收支",500,"交易成功"),
+            Transaction("微信","transfer","2026-11-10 18:00:00","同学","/","转账","支出",500,"对方已收钱"))
+        rows = {r["order_id"]:r for r in self.fetch("/api/ledger")["rows"]}
+        self.assertEqual([rows[k]["daily_choice"] for k in ("meal","fund","transfer")], ["yes","no",None])
+        self.assertEqual(rows["meal"]["initial_daily"],"yes")
+        self.fetch("/api/daily", {"ids":[ids["meal"]],"choice":None})
+        self.upload("新增.csv", alipay([("next","其他","1.00","交易成功")]))
+        meal = next(r for r in self.fetch("/api/ledger")["rows"] if r["order_id"]=="meal")
+        self.assertEqual((meal["initial_daily"],meal["daily_choice"]), ("pending",None))
+
+    def test_repayment_matching_and_settlement(self):
+        def transfer(order, date, amount, incoming):
+            return Transaction("微信",order,date+" 12:00:00","朋友","转账","转账","收入" if incoming else "支出",
+                               amount,"已存入零钱" if incoming else "对方已收钱")
+        ids = self.add_trades(transfer("principal","2026-11-20",47800,False),
+                              transfer("first","2026-12-02",30000,True),
+                              transfer("second","2026-12-12",10000,True),
+                              transfer("early","2026-11-01",20000,True),
+                              transfer("excess","2026-12-14",20000,True))
+        loan = ids["principal"]
+        self.mark({"id":loan}, "借出")
+        self.fetch("/api/budget/lending", {"value":1})
+        def month(m):
+            return self.fetch("/api/ledger",query={"start":m+"-01","end":m+"-28","budget_month":m})
+        def link(order, status="200 OK"):
+            return self.fetch("/api/budget/income",{"id":ids[order],"kind":"repayment","loan_id":loan},status=status)
+        def settle(closed):
+            self.fetch("/api/loans/settle",{"loan_id":loan,"closed":closed})
+        link("early","400 Bad Request")
+        for name in ("first","first","second"):
+            link(name)
+        dec = month("2026-12")["budget"]
+        self.assertEqual((dec["extra"],dec["returned"],dec["remaining"],dec["cash_left"]), (0,40000,200000,240000))
+        self.assertEqual(dec["loans"][0]["outstanding"],7800)
+        self.assertEqual(month("2026-11")["groups"]["日常生活"]["cents"],0)
+        settle(True)
+        nov = month("2026-11")
+        row = next(r for r in nov["rows"] if r["id"]==loan)
+        self.assertEqual((row["category"],row["personal"],row["daily_category"],row["daily_cents"]),
+                         ("借出",47800,"借款结清差额",7800))
+        self.assertEqual(nov["groups"]["日常生活"]["cents"],7800)
+        self.assertEqual((nov["budget"]["remaining"],nov["budget"]["cash_left"]), (192200,152200))
+        self.assertEqual(nov["daily_categories"], [["借款结清差额", 7800]])
+        self.assertEqual(month("2026-12")["budget"]["remaining"],200000)
+        self.fetch("/api/budget/income",{"id":ids["first"],"kind":"extra"},status="400 Bad Request")
+        settle(False)
+        self.assertEqual(month("2026-11")["groups"]["日常生活"]["cents"],0)
+        link("excess")
+        self.assertEqual(month("2026-12")["budget"]["returned"],47800)
+        settle(True)
+        self.assertEqual(month("2026-11")["budget"]["loans"][0]["daily_loss"],0)
+
+    def test_medical_and_cap_use_personal_payment(self):
+        def pay(order, amount, kind):
+            return Transaction("支付宝",order,"2026-11-10 11:00:00","商家",kind,kind,"支出",amount,"交易成功")
+        ids = self.add_trades(pay("doctor",132051,"医疗健康"),pay("low",10000,"餐饮美食"),pay("high",10100,"餐饮美食"),
+                              Transaction("微信","aa","2026-11-11 11:00:00","朋友","/","群收款","收入",200,"已存入零钱"))
+        def report():
+            return self.fetch("/api/ledger",query={"budget_month":"2026-11"})
+        d = report()
+        self.assertEqual((d["budget"]["medical"],d["budget"]["spent"],d["payments"]["cents"]), (132051,10000,152151))
+        self.assertEqual(d["groups"]["日常生活"]["cents"],10000)
+        self.fetch("/api/annotate",{"id":ids["high"],"category":"餐饮","note":"","rule":"keep","include_over_cap":True})
+        self.assertEqual(report()["groups"]["日常生活"], {"count": 2, "cents": 20100})
+        self.fetch("/api/daily",{"ids":[ids["doctor"]],"choice":"yes"},status="400 Bad Request")
+        self.fetch("/api/aa",{"receipt_id":ids["aa"],"expense_id":ids["high"]})
+        self.assertEqual(report()["groups"]["日常生活"]["cents"],19900)
+
+    def test_two_consistent_manual_preferences_and_conflict(self):
+        def item(order, product="团购-美团-套餐", merchant="美团"):
+            return Transaction("微信",order,"2026-11-10 11:00:00",merchant,product,"商户消费","支出",1200,"支付成功")
+        ids = self.add_trades(*(item(k) for k in ("a","b","c","d")),item("other","团购-美团-门票"))
+        def choice(k,v):
+            self.fetch("/api/daily",{"ids":[ids[k]],"choice":v})
+        def rows():
+            return {r["order_id"]:r for r in self.fetch("/api/ledger")["rows"]}
+        choice("a","yes")
+        self.assertIsNone(rows()["c"]["daily_choice"])
+        choice("b","yes")
+        self.assertEqual((rows()["c"]["daily_choice"],rows()["c"]["daily_source"]), ("yes","peers"))
+        self.assertIsNone(rows()["other"]["daily_choice"])
+        choice("d","no")
+        self.assertEqual((rows()["c"]["daily_choice"],rows()["c"]["daily_source"]), (None,"conflict"))
+        self.assertEqual(rows()["a"]["daily_choice"],"yes")
+        choice("c",None)
+        choice("d","yes")
+        self.assertIsNone(rows()["c"]["daily_choice"])

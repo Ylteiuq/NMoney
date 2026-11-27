@@ -31,6 +31,7 @@
 | `exported_at` | TEXT NOT NULL | 最近被采纳的账单导出时间，格式为 `YYYY-MM-DD HH:MM:SS`。文件无导出时间时存空串，可新增订单，不能覆盖已有快照。 |
 | `manual_category` | TEXT，可空 | 用户给本笔付款指定的用途，优先于商户规则和自动分类。`NULL` 表示没有逐笔标注。 |
 | `note` | TEXT NOT NULL，默认空串 | 用户给本笔流水写的备注，重导时保留。 |
+| `daily_source` | TEXT，可空 | peers 表示沿用同类商品的人工偏好，conflict 表示发现分歧，NULL 表示通用规则。 |
 | `initial_daily` | TEXT，可空 | `yes` / `no` 是初分给出的日常归属。`NULL` 表示没有初分值。`pending` 表示用户主动退回待确认，后续初分保留该决定。 |
 | `initial_category` | TEXT，可空 | 初分模型推断的用途。`NULL` 表示没有写入推断用途。仅在未指定单笔或商户用途、规则也无法判定时用于补全。 |
 
@@ -74,3 +75,24 @@
 | `value` | INTEGER NOT NULL | 对应设置的整数值。初始化为 `cap` 填入 `10000`（100 元），再次启动保留用户已修改的值。 |
 
 在 SQLite 命令行执行 `PRAGMA table_info(trades);` 可核对本地表的列、默认值和主键，用 `PRAGMA foreign_key_list(aa_links);` 可查看两个外键的实际指向。
+
+### 月度生活费与收入
+
+| 表 | 字段 | 含义 |
+| --- | --- | --- |
+| monthly_allowances | month, cents | 自然月和当月基础生活费（分）。没有设置的月份使用 2,000 元。 |
+| income_supplements | id, month, label, cents | 补记编号、到账月份、来源说明和到账金额（分）。相同编号可安全重试。 |
+| income_choices | trade_id, kind, supplement_id | 平台流水号、人工指定的额度归属和对应补记编号。每条补记最多关联一条转入。删除补记时对应的匹配会一并解除。 |
+| settings | budget_lending 对应的 value | 对账选 1 时扣借出、加归还，默认 0 将本金单列。日常预算只扣已计入的日常开支。 |
+
+
+### 借款核对
+
+| 表 | 字段 | 含义 |
+| --- | --- | --- |
+| loan_repayments | receipt_id | 已导入的回款流水 ID，主键保证一笔到账只匹配一次。 |
+| loan_repayments | loan_id | 原借出流水 ID，一笔本金可以关联多次还款。 |
+| loan_repayments | cents | 当次匹配到本金的金额（分），与实际收款金额可以不同。 |
+| loan_settlements | loan_id | 唯一字段。记录存在表示用户明确结清，删除表示重新打开。 |
+
+本金、有效回款之和及结清差额按最新账单计算，不复制原交易金额。
