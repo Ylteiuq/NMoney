@@ -208,7 +208,7 @@ function renderClusters() {
     const pending = rows.filter(r => !r.daily_choice).length;
     const title = idx === -1 ? "未找到相似项" : names.slice(0, 2).join("、") + (names.length > 2 ? "等" : "");
     const total = rows.reduce((sum, r) => sum + r.cents, 0);
-    const items = sortedRows(rows, "recent").map(r => tradeRow(r, true)).join("");
+    const items = sortedRows(rows, "recent").map(r => tradeRow(r, {gross: true})).join("");
     return `<details class="panel cluster" data-first="${rows[0].id}" ${opened.has(String(rows[0].id)) ? "open" : ""}>
       <summary><strong>${escapeHTML(title)}</strong><span>${rows.length} 笔 · 原付 ${money(total)} · ${pending} 笔待确认</span></summary>
       ${idx >= 0 && pending ? `<div class="cluster-actions"><button class="quiet" data-group="${idx}" data-choice="yes">将待确认的 ${pending} 笔计入日常</button>
@@ -229,14 +229,17 @@ function renderBudget(budget) {
     $("income-form").removeAttribute("data-entry-key");
     $("budget").dataset.month = budget.month;
   }
-  $("budget-period").textContent = budget.month + " · 全平台";
+  const [year, month] = budget.month.split("-");
+  $("budget-period").textContent = year + " 年 " + Number(month) + " 月 · 全平台";
   const left = budget.remaining;
   $("budget-title").textContent = left < 0 ? "本月日常预算已超支" : "本月日常还能花";
   $("budget-left").textContent = money(Math.abs(left));
   $("budget-status").textContent = budget.unpriced ? budget.unpriced + " 笔退款待核，金额暂计" : "";
   $("budget").classList.toggle("over", left < 0);
   const used = budget.spent;
-  $("budget-meter").style.width = (budget.total ? Math.min(100, Math.max(0, used / budget.total * 100)) : used > 0 ? 100 : 0) + "%";
+  const percent = budget.total ? used / budget.total * 100 : null;
+  $("budget-usage").textContent = percent === null ? "本月额度为零" : "已用 " + percent.toFixed(1) + "%";
+  $("budget-meter").style.width = Math.min(100, percent ?? (used > 0 ? 100 : 0)) + "%";
   $("budget-equation").textContent = "本月收入 " + money(budget.total) +
     " − 日常开支 " + money(used);
   $("budget-medical").hidden = !budget.medical;
@@ -341,7 +344,7 @@ function renderOverview(data) {
   if (!total) ring.style.background = "var(--line)";
   else if (stops.length === 1) ring.style.background = categoryColor(data.daily_categories[0][0]);
   else ring.style.background = `conic-gradient(${stops.join(", ")})`;
-  $("ring-total").textContent = money(total);
+  previewCategory(null);
   $("categories").innerHTML = categoryBars(data.daily_categories, "已确认日常");
   $("recent-list").innerHTML = data.rows.slice(0, 5).map(row => tradeRow(row)).join("") || '<p class="hint">当前范围没有交易。</p>';
   $("recent-all").href = rangedHref(new URLSearchParams({page: "details"}));
@@ -389,13 +392,30 @@ function categoryColor(name) {
 
 function categoryBars(categories, bucket, showTrack = false) {
   const total = categories.reduce((sum, [, cents]) => sum + cents, 0);
-  return categories.map(([name, value]) => `
-    <a class="category-row" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}">
+  return categories.map(([name, value], index) => `
+    <a class="category-row" data-category-index="${index}" href="${escapeHTML(rangedHref(new URLSearchParams({category: name, bucket})))}">
       <i style="background:${categoryColor(name)}" aria-hidden="true"></i><span>${escapeHTML(name)}</span>
       <small>${total ? (100 * value / total).toFixed(1) : "0.0"}%</small>
       <strong>${money(value)}</strong><span class="arrow" aria-hidden="true">›</span>
       ${showTrack ? `<span class="daily-track" aria-hidden="true"><i style="width:${total ? 100 * value / total : 0}%;background:${categoryColor(name)}"></i></span>` : ""}
     </a>`).join("") || '<p class="hint">当前范围没有对应的开支。</p>';
+}
+
+// 分类列表既是图例也是明细入口。预览只改变圆环，不修改当前筛选。
+function previewCategory(link) {
+  if (!state.ledger) return;
+  const categories = state.ledger.daily_categories;
+  const total = state.ledger.groups["日常生活"].cents;
+  const index = link ? Number(link.dataset.categoryIndex) : -1;
+  const ring = $("category-ring");
+  ring.classList.toggle("preview", index >= 0 && total > 0);
+  if (index >= 0 && total > 0) {
+    const before = categories.slice(0, index).reduce((sum, [, cents]) => sum + cents, 0);
+    ring.style.setProperty("--slice-start", before / total * 100 + "%");
+    ring.style.setProperty("--slice-end", (before + categories[index][1]) / total * 100 + "%");
+  }
+  $("ring-label").textContent = index < 0 ? "日常开支" : categories[index][0];
+  $("ring-total").textContent = money(index < 0 ? total : categories[index][1]);
 }
 
 function sortedRows(rows, mode, amount = row => row.net) {
@@ -432,11 +452,11 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   const visible = rows.filter((r) => !$("drill-category").value || category(r) === $("drill-category").value);
   const amount = r => daily ? (r.daily_cents ?? r.personal ?? 0) : r.net;
   $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + amount(r), 0));
-  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r, false, daily)).join("") ||
+  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r, {dailyView: daily})).join("") ||
     '<p class="hint">当前范围没有符合条件的消费。</p>';
 }
 
-function tradeRow(row, gross = false, dailyView = false) {
+function tradeRow(row, {gross = false, dailyView = false, columns = false} = {}) {
   const info = [["交易对方", merchantLabel(row)]];
   if (row.product && row.product !== "/") info.push(["商品说明", row.product]);
   info.push(["交易时间", row.time], ["支付平台", row.platform], ["收支类型", row.direction],
@@ -471,10 +491,13 @@ function tradeRow(row, gross = false, dailyView = false) {
   const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
   const badge = ({"餐饮":"meal", "校园消费":"meal", "日用":"bag", "美团":"bag", "医疗":"health",
     "交通":"transit", "休闲":"ticket", "投资理财":"trend", "收入":"transfer", "内部划转":"transfer"})[row.category] || "wallet";
-  const description = [waiting ? "待到账" : row.platform, row.product && row.product !== "/" ? row.product : row.category, row.time.slice(5, 16)].join(" · ");
+  const product = row.product && row.product !== "/" ? row.product : row.category;
+  const platform = escapeHTML(row.platform);
+  const time = escapeHTML(row.time.slice(5, 16));
   return `<details class="bill">
     <summary><span class="bill-icon bill-${badge}" aria-hidden="true"><svg class="icon"><use href="#icon-${badge}"/></svg></span>
-      <span class="bill-text"><strong>${escapeHTML(merchantLabel(row))}</strong><small>${escapeHTML(description)}</small></span>
+      <span class="bill-text"><strong>${escapeHTML(merchantLabel(row))}</strong><small>${waiting ? "待到账 · " : ""}<span class="inline-context">${platform} · </span>${escapeHTML(product)}<span class="inline-context"> · ${time}</span></small></span>
+      ${columns ? `<span class="bill-platform">${platform}<small>${time}</small></span>` : ""}
       <span class="bill-amount${incoming ? " income" : ""}">${amount === null ? "退款待核对" : sign + money(amount)}${net !== row.cents ?
         `<small>${gross ? (net === null ? "退款待核对" : "实付 " + money(net)) : "原付 " + money(row.cents)}</small>` : ""}</span>
       <span class="arrow" aria-hidden="true">›</span></summary>
@@ -553,7 +576,7 @@ function renderDetails() {
     const heading = (sort === "recent" || sort === "oldest") && day !== previousDay
       ? `<h3 class="bill-date">${escapeHTML(day)}</h3>` : "";
     previousDay = day;
-    return heading + tradeRow(row, gross, dailyView);
+    return heading + tradeRow(row, {gross, dailyView, columns: true});
   }).join("") || '<p class="hint">没有符合条件的交易。</p>';
   $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "医疗单列" || bucket === "实际支付" ?
     (gross ? " · 原付合计 " : dailyView ? " · 日常开支合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
@@ -647,6 +670,8 @@ async function importFiles() {
   const batch = [...importQueue];
   if (!batch.length || $("upload").disabled) return;
   $("upload").disabled = true;
+  $("upload").setAttribute("aria-busy", "true");
+  $("upload").textContent = "正在导入 " + batch.length + " 份账单…";
   $("files").disabled = true;
   $("selected-files").inert = true;
   $("import-results").replaceChildren();
@@ -668,6 +693,7 @@ async function importFiles() {
     }));
     await refresh();
   } finally {
+    $("upload").removeAttribute("aria-busy");
     $("files").disabled = false;
     $("selected-files").inert = false;
     renderImportQueue();
@@ -750,6 +776,16 @@ function bindLedger() {
     notice("已保存上限，合计已重新计算。");
   });
   on("review-only", "change", renderClusters);
+  const legend = $("categories");
+  const focusedCategory = () => legend.querySelector(".category-row:focus");
+  legend.addEventListener("pointerover", event => {
+    if (event.pointerType !== "touch") previewCategory(event.target.closest(".category-row") || focusedCategory());
+  });
+  legend.addEventListener("pointerleave", () => previewCategory(focusedCategory()));
+  legend.addEventListener("focusin", event => previewCategory(event.target.closest(".category-row")));
+  legend.addEventListener("focusout", event => {
+    previewCategory(legend.contains(event.relatedTarget) ? event.relatedTarget.closest(".category-row") : null);
+  });
   on("open-included", "click", () => toggleDrill("included"));
   on("open-daily", "click", () => toggleDrill("daily"));
   on("fold-drill", "click", () => toggleDrill(state.drill));
