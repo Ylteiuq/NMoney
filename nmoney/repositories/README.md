@@ -11,3 +11,5 @@
 | `set_initial_classification`、`upsert_daily_choice`、`reset_daily_choice` | 分别保存模型初分、写入手工日常选择、退回待确认。后者会清除手工行并留下 `pending` 标记。 |
 
 例如导入重复订单时，`order` 读取原快照，[LedgerService.import_statement](../services/ledger.py) 判断哪次导出更新，仓储接到决定后才执行 `update_snapshot`。要查某列怎样计算或关联，参阅[数据库字段字典](../infrastructure/README.md)。
+
+借款通过 `loan_repayments` 将入账流水对应到原借出流水，用 `loan_settlements` 记录是否手工结清。仓储保留匹配记录，待还金额和结清差额由服务层计算。
