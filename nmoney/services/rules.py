@@ -86,6 +86,15 @@ def is_group_receipt(tx):
             and not any(word in tx["status"] for word in ("待收", "失败", "退还", "关闭")))
 
 
+def receipts_by_expense(links):
+    """AA 分摊以有效到账为准，月份和平台不限制被抵扣的原单。"""
+    by_expense = defaultdict(list)
+    for row in links:
+        if is_group_receipt(row):
+            by_expense[row["expense_id"]].append(dict(row))
+    return by_expense
+
+
 def investment_product(tx):
     """只累计有买入动作的付款；赎回、分红与失败记录不增加投入。"""
     if tx["source_category"] != "投资理财" or tx["direction"] == "收入":
@@ -135,6 +144,8 @@ def evaluate(tx, cap, receipts=()):
         net = max(0, remaining - received)
     if state != "支出":
         bucket, category = "非消费", state
+    elif category == "医疗":
+        bucket = "医疗单列"
     elif category in EXCLUSIONS:
         bucket = "非消费"
     elif net > cap and not tx["include_over_cap"]:
@@ -149,6 +160,8 @@ def evaluate(tx, cap, receipts=()):
     manual_daily = tx["daily_choice"] or ("pending" if initial == "pending" else None)
     # 规则也适用于旧流水。显式撤回为待确认优先于规则；用途更正后立即更新默认值。
     automatic = daily_default(category) or (initial if initial in ("yes", "no") else None)
+    if tx["daily_source"] in ("peers", "conflict"):
+        automatic = initial if initial in ("yes", "no") else None
     daily_choice = None if manual_daily == "pending" else tx["daily_choice"] or automatic
     if not outflow:
         daily_choice = None
@@ -159,7 +172,16 @@ def evaluate(tx, cap, receipts=()):
     elif state == "已退款":
         personal = 0
         refund = tx["cents"]
-    return dict(tx, manual_category=manual, merchant_category=merchant, category=category,
+    lock = None
+    if outflow:
+        if category in ("医疗", "借出", "投资理财"):
+            lock = category + "单列"
+        elif personal is not None and personal > cap:
+            lock = "个人实付超过单笔上限"
+        if lock:
+            daily_choice = "no"
+    return dict(tx, daily_lock=lock, daily_cents=personal if daily_choice == "yes" else 0, daily_category=category,
+                manual_category=manual, merchant_category=merchant, category=category,
                 bucket=bucket, net=net, editable=state == "支出",
                 outflow=outflow, personal=personal if outflow else None,
                 payment=outflow and category not in ("投资理财", "内部划转"), refund_cents=refund,
@@ -206,8 +228,8 @@ def summarize(rows):
                 if row["personal"] is None:
                     outflow["daily_unpriced"] += 1
                 else:
-                    groups["日常生活"]["cents"] += row["personal"]
-                    month["daily"] += row["personal"]
+                    groups["日常生活"]["cents"] += row["daily_cents"]
+                    month["daily"] += row["daily_cents"]
         if row["fund"]:
             fund = funds[row["fund"]]
             fund["count"] += 1

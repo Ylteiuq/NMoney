@@ -29,9 +29,8 @@ function post(url, payload) {
     body: JSON.stringify(payload) });
 }
 
-// 老服务仍在运行时先把新标记留在当前浏览器。按平台和订单号衔接重启后的数据库。
+// 迁移旧版浏览器留下的手工标记。所有新决定直接写入服务端。
 const dailyKey = row => JSON.stringify([row.platform, row.order_id]);
-const initialDaily = row => ["yes", "no"].includes(row.initial_daily) ? row.initial_daily : null;
 let storeName;
 async function choiceStore() {
   if (!storeName) {
@@ -43,28 +42,6 @@ async function choiceStore() {
 
 function stagedChoices(key) {
   return new Map(JSON.parse(localStorage.getItem(key) || "[]"));
-}
-
-async function saveDaily(payload) {
-  if (!state.ledger.legacy_daily) return post("/api/daily", payload);
-  const key = await choiceStore();
-  return navigator.locks.request(key, () => {
-    const staged = stagedChoices(key);
-    let changed = 0;
-    const ids = new Set(payload.ids);
-    for (const row of state.ledger.rows) {
-      if (!ids.has(row.id) || !row.outflow) continue;
-      const identity = dailyKey(row);
-      const previous = staged.has(identity) ? staged.get(identity) : initialDaily(row);
-      if (payload.pending_only && previous) continue;
-      if (payload.choice === previous) continue;
-      if (payload.choice || row.initial_daily) staged.set(identity, payload.choice);
-      else staged.delete(identity);
-      changed++;
-    }
-    localStorage.setItem(key, JSON.stringify([...staged]));
-    return {changed};
-  });
 }
 
 async function syncChoices(key) {
@@ -85,80 +62,6 @@ async function syncChoices(key) {
     else localStorage.removeItem(key);
     return known.length > 0;
   });
-}
-
-function legacyDailyReport(data, staged) {
-  data.legacy_daily = true;
-  const out = data.outflow = {count: 0, cents: 0, pending: 0, daily_unpriced: 0, extra_invested: 0};
-  const daily = data.groups["日常生活"] = {count: 0, cents: 0};
-  const months = new Map(data.months);
-  for (const month of months.values()) { month.outflow = 0; month.daily = 0; }
-  for (const row of data.rows) {
-    const unpaid = /关闭|撤销|失败|待付款|等待付款|待支付|未支付|未付款/.test(row.status);
-    row.outflow = row.direction === "支出" ? row.status.includes("退款") || !unpaid : Boolean(row.fund);
-    const key = dailyKey(row);
-    row.manual_daily = staged.get(key) || null;
-    row.daily_choice = row.outflow ? (staged.has(key) ? staged.get(key) : initialDaily(row)) : null;
-    row.daily = row.daily_choice === "yes";
-    row.personal = row.outflow ? row.net : null;
-    if (!row.outflow) continue;
-    if (row.category === "退款待核对") row.personal = null;
-    if (row.category === "已退款") row.personal = 0;
-    const month = months.get(row.time.slice(0, 7));
-    month.outflow += row.cents;
-    out.count++;
-    out.cents += row.cents;
-    if (row.direction !== "支出") out.extra_invested += row.cents;
-    if (!row.daily_choice) out.pending++;
-    if (row.daily) {
-      daily.count++;
-      if (row.personal === null) out.daily_unpriced++;
-      daily.cents += row.personal || 0;
-      month.daily += row.personal || 0;
-    }
-  }
-}
-
-// 已启动的旧服务没有实付汇总，但逐笔 personal 已扣除退款和关联回款。
-function legacyPaymentReport(data) {
-  const totals = {count: 0, gross: 0, cents: 0, unpriced: 0, unpriced_gross: 0};
-  const months = new Map(data.months);
-  for (const month of months.values()) { month.paid = 0; month.paid_unpriced = 0; }
-  for (const row of data.rows) {
-    row.payment = row.outflow && !["投资理财", "内部划转"].includes(row.category);
-    if (!row.payment) continue;
-    totals.count++;
-    totals.gross += row.cents;
-    const month = months.get(row.time.slice(0, 7));
-    if (row.personal === null) {
-      totals.unpriced++;
-      totals.unpriced_gross += row.cents;
-      month.paid_unpriced++;
-    } else {
-      totals.cents += row.personal;
-      month.paid += row.personal;
-    }
-  }
-  data.payments = totals;
-}
-
-// 正在运行的旧版服务仍会返回细分类。刷新页面即可使用相同的分类口径。
-function mergeLegacyCategories(data) {
-  const aliases = new Map([["咖啡", "餐饮"], ["洗衣", "日用"], ["数码", "休闲"]]);
-  if (!data.choices.some(name => aliases.has(name))) return;
-  const category = name => aliases.get(name) || name;
-  data.choices = [...new Set(data.choices.map(category))];
-  for (const row of data.rows) {
-    row.category = category(row.category);
-    row.manual_category = category(row.manual_category);
-    row.merchant_category = category(row.merchant_category);
-  }
-  const totals = new Map();
-  for (const [name, cents] of data.categories) {
-    const merged = category(name);
-    totals.set(merged, (totals.get(merged) || 0) + cents);
-  }
-  data.categories = [...totals].sort((a, b) => b[1] - a[1]);
 }
 
 function navigate(page) {
@@ -266,16 +169,13 @@ async function refresh() {
   const url = "/api/ledger?" + query;
   let data = await request(url);
   if (version !== state.request) return;
-  const key = await choiceStore();
-  if (!data.outflow) {
-    legacyDailyReport(data, stagedChoices(key));
-  } else if (await syncChoices(key)) {
-    data = await request(url);
+  if (!Array.isArray(data.clusters)) {
+    $(state.page).hidden = true;
+    throw new Error("正在运行旧版后端。请重启 NMoney 服务后刷新，读取更新后的账本。");
   }
+  $(state.page).hidden = false;
+  if (await syncChoices(await choiceStore())) data = await request(url);
   if (version !== state.request) return;
-  $("sync-info").hidden = !data.legacy_daily;
-  mergeLegacyCategories(data);
-  if (!data.payments) legacyPaymentReport(data);
   state.ledger = data;
   const selected = $("period").value;
   const now = new Date();
@@ -286,7 +186,6 @@ async function refresh() {
   $("period").replaceChildren(...options);
   $("period").value = selected;
   $("cap").value = data.cap / 100;
-  $("budget-upgrade").hidden = !query.has("budget_month") || Boolean(data.budget);
   renderBudget(data.budget);
   renderOverview(data);
   renderDetails();
@@ -294,12 +193,8 @@ async function refresh() {
 }
 
 function renderClusters() {
-  if (typeof clusterOutflows !== "function") {
-    $("cluster-count").textContent = "";
-    $("cluster-list").textContent = "聚类模块未载入。请重新启动 NMoney 服务并刷新页面。";
-    return;
-  }
-  const groups = clusterOutflows(state.ledger.rows);
+  const byId = new Map(state.ledger.rows.map(row => [row.id, row]));
+  const groups = state.ledger.clusters.map(ids => ids.map(id => byId.get(id)));
   const onlyPending = $("review-only").checked;
   state.clusters = groups.filter(rows => rows.length > 1)
     .map(rows => onlyPending ? rows.filter(r => !r.daily_choice) : rows).filter(rows => rows.length);
@@ -344,8 +239,11 @@ function renderBudget(budget) {
   $("budget").classList.toggle("over", left < 0);
   const used = budget.total - left;
   $("budget-meter").style.width = (budget.total ? Math.min(100, Math.max(0, used / budget.total * 100)) : used > 0 ? 100 : 0) + "%";
-  const terms = ["生活费 " + money(budget.base), "额外收入 " + money(budget.manual + budget.extra), "实付 " + money(budget.spent)];
-  if (budget.lent && budget.lending !== 1) terms.push("其中借出 " + money(budget.lent));
+  const terms = ["生活费 " + money(budget.base), "额外收入 " + money(budget.manual + budget.extra), "占用额度的支付 " + money(budget.spent)];
+  $("budget-medical").hidden = !budget.medical;
+  $("budget-medical").textContent = "医疗另计 " + money(budget.medical || 0) + " ›";
+  $("budget-medical").href = "#" + new URLSearchParams({period: budget.month, bucket: "医疗单列"});
+  if (budget.lent) terms.push("其中借出 " + money(budget.lent));
   if (budget.returned) terms.push("归还借款 " + money(budget.returned));
   if (!settled) terms.push("剔除借款往来后剩 " + money(budget.spending_left));
   if (budget.unpriced) terms.push(budget.unpriced + " 笔退款实付待核，余额为暂计");
@@ -355,6 +253,15 @@ function renderBudget(budget) {
   $("supplements").innerHTML = budget.supplements.map(s => '<div class="income-item"><div>' +
     escapeHTML(s.label) + " · " + money(s.cents) + (s.trade_id ? " · 已匹配流水" : "") +
     '</div><button class="row-action" data-remove-income="' + escapeHTML(s.id) + '">撤销补记</button></div>').join("");
+  const loans = budget.loans || [];
+  $("budget-loans").innerHTML = loans.map(loan => {
+    const repayments = loan.repayments.map(r => '<li>' + escapeHTML(r.time.slice(0, 10)) + " · 还款 " + money(r.credited) + "</li>").join("");
+    return '<div class="income-item"><div>' + escapeHTML(loan.merchant) + " · 借出 " + money(loan.principal) +
+      '<small>' + escapeHTML(loan.time.slice(0, 10)) + " · 已还 " + money(loan.repaid) + (loan.closed ?
+        " · 已结清，差额计日常 " + money(loan.daily_loss) : " · 待还 " + money(loan.outstanding)) + '</small>' +
+      (repayments ? '<ul>' + repayments + '</ul>' : '') + '</div><button class="row-action" data-settle-loan="' +
+      loan.id + '">' + (loan.closed ? "重新打开" : loan.outstanding ? "结清，差额 " + money(loan.outstanding) + " 计日常" : "确认结清") + '</button></div>';
+  }).join("") || '<p class="hint">没有待核对的借款。</p>';
   const items = [];
   for (const income of budget.incomes) {
     const item = document.createElement("div");
@@ -370,12 +277,21 @@ function renderBudget(budget) {
     select.setAttribute("aria-label", income.merchant + " 收入归属");
     select.dataset.incomeId = income.id;
     select.add(new Option(income.choice === "auto" ? "自动 · " + kinds[income.kind] : "恢复自动判断", "auto"));
-    for (const k of ["extra", "base", "repayment", "ignore"]) select.add(new Option(kinds[k], k));
+    for (const k of ["extra", "base", "ignore"]) select.add(new Option(kinds[k], k));
     for (const s of budget.supplements) {
       if (s.cents === income.cents && (!s.trade_id || s.trade_id === income.id))
         select.add(new Option("对应补记 · " + s.label, "matched:" + s.id));
     }
-    select.value = income.choice === "matched" ? "matched:" + income.supplement_id : income.choice;
+    if (income.status === "settled" || income.repayment_loan) {
+      for (const loan of loans) {
+        if (loan.id === income.repayment_loan || (!loan.closed && loan.outstanding && loan.time <= income.time)) {
+          select.add(new Option("归还 " + loan.time.slice(5,10) + " 借给 " + loan.merchant + " 的 " + money(loan.principal), "loan:" + loan.id));
+        }
+      }
+    }
+    if (income.choice === "repayment" && !income.repayment_loan) select.add(new Option("归还借款（未关联）","repayment"));
+    if (income.repayment_loan && income.cents > income.repayment_cents) info.textContent += " · 未抵本金 " + money(income.cents - income.repayment_cents);
+    select.value = income.repayment_loan ? "loan:" + income.repayment_loan : income.choice === "matched" ? "matched:" + income.supplement_id : income.choice;
     item.append(label, select);
     items.push(item);
   }
@@ -504,32 +420,37 @@ function renderDrill(selectedCategory = $("drill-category").value) {
   if (!state.drill || !state.ledger) return;
   const daily = state.drill === "daily";
   const rows = state.ledger.rows.filter((r) => daily ? r.daily : r.bucket === "已计入");
-  const names = new Set(rows.map((r) => r.category));
+  const category = r => daily ? (r.daily_category || r.category) : r.category;
+  const names = new Set(rows.map(category));
   $("drill-category").replaceChildren(new Option("全部用途", ""), ...Array.from(names).sort().map(n => new Option(n, n)));
   $("drill-category").value = names.has(selectedCategory) ? selectedCategory : "";
   $("drill-title").textContent = daily ? "日常开销明细" : "已计入消费明细";
   $("daily-chart").hidden = !daily;
   if (daily) {
     const totals = new Map();
-    for (const r of rows) totals.set(r.category, (totals.get(r.category) || 0) + (r.personal || 0));
+    for (const r of rows) totals.set(category(r), (totals.get(category(r)) || 0) + (r.daily_cents ?? r.personal ?? 0));
     $("daily-bars").innerHTML = bars([...totals].sort((a, b) => b[1] - a[1]), "已确认日常");
   }
-  const visible = rows.filter((r) => !$("drill-category").value || r.category === $("drill-category").value);
-  const amount = r => daily ? r.personal || 0 : r.net;
+  const visible = rows.filter((r) => !$("drill-category").value || category(r) === $("drill-category").value);
+  const amount = r => daily ? (r.daily_cents ?? r.personal ?? 0) : r.net;
   $("drill-total").textContent = visible.length + " 笔 · " + money(visible.reduce((total, r) => total + amount(r), 0));
-  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r)).join("") ||
+  $("drill-trades").innerHTML = sortedRows(visible, $("drill-sort").value, amount).map(r => tradeRow(r, false, daily)).join("") ||
     '<p class="hint">当前范围没有符合条件的消费。</p>';
 }
 
-function tradeRow(row, gross = false) {
+function tradeRow(row, gross = false, dailyView = false) {
   const info = [["交易对方", merchantLabel(row)]];
   if (row.product && row.product !== "/") info.push(["商品说明", row.product]);
   info.push(["交易时间", row.time], ["支付平台", row.platform], ["收支类型", row.direction],
     ["交易状态", row.status], ["用途", row.category], ["统计状态", row.bucket], ["订单号", row.order_id], ["原始金额", money(row.cents)]);
   if (row.outflow) info.push(["个人实付", row.personal === null ? "退款待核对" : money(row.personal)]);
+  if (row.loan) {
+    info.push(["已还本金", money(row.loan.repaid)], ["待还本金", money(row.loan.outstanding)]);
+    if (row.loan.closed) info.push(["结清差额计日常", money(row.loan.daily_loss)]);
+  }
   if (row.note) info.push(["备注", row.note]);
   if (row.outflow) info.push(["日常归属", row.daily_choice === "yes" ? "日常" : row.daily_choice === "no" ? "非日常" : "待确认"],
-    ["判断来源", row.manual_daily ? "手动选择" : row.daily_choice ? "自动初分" : "证据不足"]);
+    ["判断来源", row.daily_lock || (row.manual_daily ? "手动选择" : row.daily_source === "peers" ? "同商户同类商品的人工标记一致" : row.daily_source === "conflict" ? "人工标记有分歧" : row.daily_choice ? "自动初分" : "证据不足")]);
   for (const receipt of row.receipts) info.push(["群收款抵扣", receipt.time.slice(0, 10) + " · " + receipt.merchant + " · " + money(receipt.cents)]);
   if (row.include_over_cap) info.push(["上限例外", "已手动计入"]);
   if (row.group_receipt && row.linked_expense_id) info.push(["关联付款", row.linked_merchant]);
@@ -539,14 +460,14 @@ function tradeRow(row, gross = false) {
   } else if (row.group_receipt) {
     edit = `<button class="row-action" data-receipt="${row.id}">关联付款</button>`;
   }
-  if (row.outflow) {
+  if (row.outflow && !row.daily_lock) {
     const choices = [["", "待确认"], ["yes", "计入日常"], ["no", "非日常"]];
     edit += `<select class="daily-select" data-daily="${row.id}" aria-label="日常归属 · ${escapeHTML(row.merchant)}">${choices.map(
       ([value, label]) => `<option value="${value}"${value === (row.daily_choice || "") ? " selected" : ""}>${label}</option>`
     ).join("")}</select>`;
   }
   const net = row.outflow ? row.personal : row.net;
-  const amount = gross ? row.cents : net;
+  const amount = dailyView ? (row.daily_cents ?? net) : gross ? row.cents : net;
   const waiting = row.income_status === "waiting";
   const incoming = row.direction === "收入" && !waiting;
   const sign = amount > 0 ? (incoming ? "+" : row.outflow ? "−" : "") : "";
@@ -568,13 +489,13 @@ function merchantLabel(row) {
   return name && name !== "/" ? name : "未标明商户";
 }
 
-function renderMerchants(rows) {
+function renderMerchants(rows, amount) {
   const merchants = new Map();
   for (const row of rows) {
     const name = merchantLabel(row);
     const group = merchants.get(name) || {count: 0, cents: 0};
     group.count++;
-    group.cents += row.outflow ? row.personal || 0 : row.net;
+    group.cents += amount(row);
     merchants.set(name, group);
   }
   $("merchant-list").innerHTML = [...merchants].sort((a, b) => b[1].cents - a[1].cents ||
@@ -594,9 +515,9 @@ function transactionSearch(input) {
   });
   if (!terms.length) return () => true;
   return row => {
-    const text = normalize([row.merchant, row.product, row.category, row.note, row.order_id,
+    const text = normalize([row.merchant, row.product, row.category, row.daily_category, row.note, row.order_id,
       row.time, row.platform, row.direction, row.bucket, row.status, row.source_category].join(" "));
-    return terms.every(term => term.cents === row.cents || term.cents === row.net || term.cents === row.personal ||
+    return terms.every(term => term.cents === row.cents || term.cents === row.net || term.cents === row.personal || (row.daily && term.cents === row.daily_cents) ||
       (!term.amountOnly && text.includes(term.word)));
   };
 }
@@ -607,7 +528,8 @@ function renderDetails() {
   const matchesSearch = transactionSearch($("search").value);
   const dailyFilters = {"日常待确认": null, "已确认日常": "yes", "已确认非日常": "no"};
   const gross = bucket === "全部支出" || bucket === "日常待确认" || bucket === "已确认非日常";
-  const amount = r => gross ? r.cents : r.outflow ? r.personal || 0 : r.net;
+  const dailyView = bucket === "已确认日常";
+  const amount = r => dailyView ? (r.daily_cents ?? r.personal ?? 0) : gross ? r.cents : r.outflow ? r.personal || 0 : r.net;
   const matchesBucket = row => {
     if (bucket === "实际支付") return row.payment;
     if (bucket === "全部支出") return row.outflow;
@@ -615,8 +537,8 @@ function renderDetails() {
     return !bucket || row.bucket === bucket;
   };
   const matching = state.ledger.rows.filter((row) => matchesBucket(row) &&
-    (!state.category || row.category === state.category) && matchesSearch(row));
-  if (state.category) renderMerchants(matching);
+    (!state.category || (dailyView ? row.daily_category || row.category : row.category) === state.category) && matchesSearch(row));
+  if (state.category) renderMerchants(matching, amount);
   const rows = state.merchant === null ? matching : matching.filter(row => merchantLabel(row) === state.merchant);
   $("clear-merchant").hidden = state.merchant === null;
   if (state.merchant !== null) $("clear-merchant").textContent = "清除商户筛选 · " + state.merchant + " ×";
@@ -630,9 +552,9 @@ function renderDetails() {
     const heading = (sort === "recent" || sort === "oldest") && day !== previousDay
       ? `<h3 class="bill-date">${escapeHTML(day)}</h3>` : "";
     previousDay = day;
-    return heading + tradeRow(row, gross);
+    return heading + tradeRow(row, gross, dailyView);
   }).join("") || '<p class="hint">没有符合条件的交易。</p>';
-  $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "实际支付" ?
+  $("row-count").textContent = rows.length + " 笔交易" + (gross || state.category || bucket === "已确认日常" || bucket === "医疗单列" || bucket === "实际支付" ?
     (gross ? " · 原付合计 " : " · 已知实付合计 ") + money(rows.reduce((sum, row) => sum + amount(row), 0)) : "");
   if (bucket === "实际支付") {
     const unpriced = rows.filter(row => row.personal === null).length;
@@ -651,8 +573,8 @@ function openEditor(id) {
   $("category").replaceChildren(...state.ledger.choices.map((item) => new Option(item, item)));
   $("category").value = row.category;
   $("note").value = row.note;
-  $("exception-field").hidden = row.net <= state.ledger.cap && !row.include_over_cap;
-  $("exception").checked = Boolean(row.include_over_cap) || row.bucket === "超上限";
+  $("exception-field").hidden = row.category === "医疗" || (row.net <= state.ledger.cap && !row.include_over_cap);
+  $("exception").checked = row.category !== "医疗" && (Boolean(row.include_over_cap) || row.bucket === "超上限");
   $("edit-error").textContent = "";
   $("rule").value = "keep";
   $("rule").disabled = !row.merchant || row.merchant === "/";
@@ -753,9 +675,6 @@ function on(id, event, action) {
 }
 
 function bindLedger() {
-  window.addEventListener("storage", event => {
-    if (event.key === storeName && state.ledger?.legacy_daily) refresh().catch(error => notice(error.message, true));
-  });
   for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => {
     location.hash = tab.dataset.page === "clusters" ? rangedHref(new URLSearchParams({page: "clusters"})) : tab.dataset.page;
   };
@@ -803,11 +722,18 @@ function bindLedger() {
     await post("/api/budget/supplement", {id: button.dataset.removeIncome, month: state.ledger.budget.month, cents: null});
     await refresh();
   });
+  on("budget-loans", "click", async e => {
+    const button = e.target.closest("[data-settle-loan]");
+    if (!button) return;
+    const loan = state.ledger.budget.loans.find(item => item.id === Number(button.dataset.settleLoan));
+    await post("/api/loans/settle", {loan_id: loan.id, closed: !loan.closed});
+    await refresh();
+  });
   on("budget-incomes", "change", async e => {
     const select = e.target.closest("[data-income-id]");
     if (!select) return;
     const [kind, id] = select.value.split(":");
-    try { await post("/api/budget/income", {id: Number(select.dataset.incomeId), kind, supplement_id: id}); }
+    try { await post("/api/budget/income", {id: Number(select.dataset.incomeId), kind: kind === "loan" ? "repayment" : kind, loan_id: kind === "loan" ? Number(id) : null, supplement_id: id}); }
     finally { await refresh(); }
   });
   on("cap-form", "submit", async () => {
@@ -859,7 +785,7 @@ function bindLedger() {
     const buttons = button.parentElement.querySelectorAll("button");
     buttons.forEach(b => b.disabled = true);
     try {
-      const result = await saveDaily({ids, choice: button.dataset.choice, pending_only: true});
+      const result = await post("/api/daily", {ids, choice: button.dataset.choice, pending_only: true});
       await refresh();
       notice("已更新 " + result.changed + " 笔支出的日常归属。");
     } finally { buttons.forEach(b => b.disabled = false); }
@@ -871,7 +797,7 @@ function bindLedger() {
     const previous = state.ledger.rows.find(row => row.id === id)?.daily_choice;
     select.disabled = true;
     try {
-      await saveDaily({ids: [id], choice: select.value || null});
+      await post("/api/daily", {ids: [id], choice: select.value || null});
     } catch (error) {
       select.disabled = false;
       select.value = previous || "";
@@ -905,6 +831,12 @@ function bindLedger() {
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) $(id).close();
     });
   }
+  on("category", "change", () => {
+    const row = state.ledger.rows.find(r => r.id === state.editId);
+    const medical = $("category").value === "医疗";
+    $("exception-field").hidden = medical || (row.net <= state.ledger.cap && !row.include_over_cap);
+    if (medical) $("exception").checked = false;
+  });
   on("edit-form", "submit", async () => {
     try {
       await post("/api/annotate", { id: state.editId, category: $("category").value,

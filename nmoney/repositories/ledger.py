@@ -111,9 +111,29 @@ class LedgerRepository:
             ON CONFLICT(trade_id) DO UPDATE SET choice=excluded.choice WHERE choice != excluded.choice""",
                                  (trade_id, choice)).rowcount
 
-    def set_initial_classification(self, trade_id, choice, category):
-        self.conn.execute("UPDATE trades SET initial_daily=?, initial_category=? WHERE id=?",
-                          (choice, category, trade_id))
+    def set_initial_classification(self, trade_id, choice, category, source):
+        self.conn.execute("UPDATE trades SET initial_daily=?, initial_category=?, daily_source=? WHERE id=?",
+                          (choice, category, source, trade_id))
+
+    def loan_repayments(self):
+        return self.conn.execute("""SELECT t.*, l.loan_id, l.cents AS allocated FROM loan_repayments l
+            JOIN trades t ON t.id=l.receipt_id ORDER BY t.time, t.id""").fetchall()
+
+    def settled_loans(self):
+        return {row[0] for row in self.conn.execute("SELECT loan_id FROM loan_settlements")}
+
+    def link_loan(self, receipt_id, loan_id, cents):
+        self.conn.execute("""INSERT INTO loan_repayments VALUES (?,?,?) ON CONFLICT(receipt_id)
+            DO UPDATE SET loan_id=excluded.loan_id, cents=excluded.cents""", (receipt_id, loan_id, cents))
+
+    def unlink_loan(self, receipt_id):
+        self.conn.execute("DELETE FROM loan_repayments WHERE receipt_id=?", (receipt_id,))
+
+    def settle_loan(self, loan_id, closed):
+        if closed:
+            self.conn.execute("INSERT OR IGNORE INTO loan_settlements VALUES (?)", (loan_id,))
+        else:
+            self.conn.execute("DELETE FROM loan_settlements WHERE loan_id=?", (loan_id,))
 
     def receipt_links(self):
         return self.conn.execute("""
@@ -133,7 +153,7 @@ class LedgerRepository:
             """SELECT substr(time,1,7) AS month FROM trades UNION SELECT month FROM monthly_allowances
                UNION SELECT month FROM income_supplements ORDER BY month DESC""")]
 
-    def trades(self, start, end, platform):
+    def trades(self, start, end, platform, loans_only=False):
         """按范围取流水，附上商户规则、日常选择、上限例外和回款所对应的原单。"""
         clauses, params = [], []
         if start:
@@ -145,17 +165,20 @@ class LedgerRepository:
         if platform:
             clauses.append("t.platform = ?")
             params.append(platform)
+        if loans_only:
+            clauses.append("COALESCE(t.manual_category, r.category) = '借出'")
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         # 手工标注和回款关联都可以缺省。LEFT JOIN 让尚未分类的流水也出现在列表中。
         return self.conn.execute("""
             SELECT t.*, r.category AS merchant_category, x.trade_id IS NOT NULL AS include_over_cap, d.choice AS daily_choice,
                    a.expense_id AS linked_expense_id, e.merchant AS linked_merchant, e.time AS linked_time,
-                   e.status AS linked_status, ic.kind AS income_choice, ic.supplement_id
+                   e.status AS linked_status, ic.kind AS income_choice, ic.supplement_id, lr.loan_id AS linked_loan_id
             FROM trades t LEFT JOIN merchant_rules r
                 ON t.merchant=r.merchant AND t.platform=r.platform
             LEFT JOIN included_exceptions x ON x.trade_id=t.id
             LEFT JOIN daily_choices d ON d.trade_id=t.id
             LEFT JOIN income_choices ic ON ic.trade_id=t.id
+            LEFT JOIN loan_repayments lr ON lr.receipt_id=t.id
             LEFT JOIN aa_links a ON a.receipt_id=t.id
             LEFT JOIN trades e ON e.id=a.expense_id
         """ + where + " ORDER BY t.time DESC, t.id DESC", params).fetchall()

@@ -16,6 +16,7 @@ from nmoney.infrastructure.database import DEFAULT_DB, initialize, repository_se
 from nmoney.http.middleware import local_only
 from nmoney.http.router import build_router
 from nmoney.services.ledger import LedgerService
+from nmoney.services.classification import classify
 
 
 WEB = Path(__file__).resolve().parent / "web"
@@ -53,6 +54,9 @@ def main():
             return
         sys.exit(f"端口 {args.port} 已被占用。可打开现有账本，或使用 --port 指定其他端口。")
     with server:
+        # 已有账本也采用当前的偏好规则，无需重新上传原始账单。
+        with repository_session(args.db, immediate=True) as repo:
+            classify(repo, "", "", apply=True)
         print(f"NMoney 已启动  {url}\n按 Ctrl+C 退出。", flush=True)
         if args.open:
             webbrowser.open(url)

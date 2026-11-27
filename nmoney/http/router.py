@@ -17,6 +17,7 @@ def build_router(controller, web_root):
         ("POST", "/api/aa"): controller.link_receipt,
         ("POST", "/api/cap"): controller.set_cap,
         ("POST", "/api/daily"): controller.mark_daily,
+        ("POST", "/api/loans/settle"): controller.settle_loan,
         ("POST", "/api/budget/base"): controller.set_allowance,
         ("POST", "/api/budget/lending"): controller.set_budget_lending,
         ("POST", "/api/budget/supplement"): controller.supplement,
@@ -28,7 +29,6 @@ def build_router(controller, web_root):
         ("GET", "/"): partial(static_file, file=web_root / "index.html", mime="text/html"),
         ("GET", "/style.css"): partial(static_file, file=web_root / "style.css", mime="text/css"),
         ("GET", "/app.js"): partial(static_file, file=web_root / "app.js", mime="text/javascript"),
-        ("GET", "/clustering.js"): partial(static_file, file=web_root / "clustering.js", mime="text/javascript"),
         ("GET", "/favicon.svg"): partial(static_file, file=web_root / "favicon.svg", mime="image/svg+xml"),
     })
 

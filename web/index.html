@@ -7,7 +7,6 @@
   <title>NMoney · 个人账本</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
-  <script src="/clustering.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -51,20 +50,19 @@
       </section>
     </div>
     <p id="notice" role="status" hidden></p>
-    <p id="sync-info" class="sync-note" hidden>日常标记暂存在当前浏览器，重启账本服务后会自动同步。</p>
     <section id="overview">
-      <p id="budget-upgrade" class="sync-note" hidden>当前服务是旧版本。重启 NMoney 后即可查看月度可用余额。</p>
       <section class="panel budget" id="budget" hidden aria-labelledby="budget-title">
         <div class="panel-heading"><h2 id="budget-title">本月可用余额</h2><span class="hint" id="budget-period"></span></div>
         <div class="budget-line"><strong id="budget-left"></strong><span id="budget-status"></span></div>
         <div class="budget-track" aria-hidden="true"><i id="budget-meter"></i></div>
-        <p class="hint" id="budget-equation"></p>
+        <p class="hint"><span id="budget-equation"></span> <a id="budget-medical" hidden></a></p>
         <details id="budget-manage"><summary>收入与额度管理</summary>
           <form id="base-form" class="budget-form"><label>本月基础生活费（元）<input id="base-amount" type="number" min="0" step=".01" required></label><button class="quiet">保存生活费</button></form>
           <label class="loan-control">借款对各月余额的影响<select id="budget-lending"><option value="" disabled>请选择口径</option><option value="1">借出占用，还款补回</option><option value="0">借出和收回均不影响</option></select></label>
           <h3>手工补记收入</h3><div id="supplements"></div>
           <form id="income-form" class="budget-form"><label>收入来源<input id="income-label" placeholder="如银行卡劳务费" required></label><label>到账金额（元）<input id="income-amount" type="number" min=".01" step=".01" required></label><button class="quiet">添加收入</button></form>
           <h3>账单转入</h3><div id="budget-incomes"></div>
+          <h3>借出与还款</h3><div id="budget-loans"></div>
         </details>
       </section>
       <section class="statement" aria-label="支出对账">
@@ -107,7 +105,7 @@
       <div class="panel details-panel">
         <div class="detail-filters">
           <label class="search"><span>关键词搜索</span><span class="search-input"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="search" type="search" placeholder="搜索商户、商品、金额或备注"></span></label>
-          <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>实际支付</option><option value="全部支出">原付流水（含理财）</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>非消费</option></optgroup></select></label>
+          <label id="bucket-field">筛选流水<select id="bucket"><option value="">全部交易</option><optgroup label="支出与日常"><option>实际支付</option><option value="全部支出">原付流水（含理财）</option><option>日常待确认</option><option>已确认日常</option><option>已确认非日常</option></optgroup><optgroup label="用途统计"><option>待分类</option><option>已计入</option><option>超上限</option><option>医疗单列</option><option>非消费</option></optgroup></select></label>
           <label>排序<select id="detail-sort"><option value="recent">时间从新到旧</option><option value="oldest">时间从旧到新</option><option value="highest">金额从高到低</option><option value="lowest">金额从低到高</option></select></label>
         </div>
         <p id="row-count" class="table-meta" aria-live="polite"></p>

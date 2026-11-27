@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS trades (
     note TEXT NOT NULL DEFAULT '',       -- 用户填写的单笔备注，默认空串，重导账单时保留。
     -- 初分的 yes/no 表示日常/非日常。手动退回待确认记 pending，NULL 表示没有初分值。
     initial_daily TEXT CHECK(initial_daily IN ('yes','no','pending')),
+    daily_source TEXT,                   -- peers 表示采纳人工同类样本，conflict 表示人工意见分歧，NULL 表示通用规则。
     initial_category TEXT,               -- 相似支出模型推断的用途。NULL 表示未推断，用于补充原本未知的用途。
     UNIQUE(platform, order_id)
 );
@@ -77,6 +78,18 @@ CREATE TABLE IF NOT EXISTS income_choices (
     supplement_id TEXT UNIQUE REFERENCES income_supplements(id) ON DELETE CASCADE -- matched 对应的补记，每笔最多认领一次。
 );
 
+-- 一笔借出可以对应多次还款。收款交易主键阻止同一笔收入重复抵本金。
+CREATE TABLE IF NOT EXISTS loan_repayments (
+    receipt_id INTEGER PRIMARY KEY REFERENCES trades(id), -- 已导入的实际到账流水 ID。
+    loan_id INTEGER NOT NULL REFERENCES trades(id),       -- 原借出流水，可与回款跨月、跨平台。
+    cents INTEGER NOT NULL CHECK(cents > 0)               -- 本次明确用于还本金的分数，至多为转入额及待还本金。
+);
+CREATE INDEX IF NOT EXISTS loan_repayments_by_loan ON loan_repayments(loan_id);
+-- 只有用户明确结清才产生差额日常支出，删除此标记即重新打开借款。
+CREATE TABLE IF NOT EXISTS loan_settlements (
+    loan_id INTEGER PRIMARY KEY REFERENCES trades(id)     -- 已确认结清的原借出流水；差额随有效回款和退款计算。
+);
+
 -- 全账本共用的整数设置。
 CREATE TABLE IF NOT EXISTS settings (
     name TEXT PRIMARY KEY,               -- 设置键。cap 为单笔上限，budget_lending 决定借出是否占用月度额度。
@@ -108,6 +121,8 @@ def initialize(path=DEFAULT_DB):
         # CREATE TABLE IF NOT EXISTS 会保留已有表。先取写锁再检查列，避免两个启动进程重复加列。
         conn.execute("BEGIN IMMEDIATE")
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(trades)")}
+        if "daily_source" not in columns:
+            conn.execute("ALTER TABLE trades ADD COLUMN daily_source TEXT")
         if "initial_daily" not in columns:
             conn.execute("ALTER TABLE trades ADD COLUMN initial_daily TEXT CHECK(initial_daily IN ('yes','no','pending'))")
         if "initial_category" not in columns:

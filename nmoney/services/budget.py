@@ -40,22 +40,25 @@ def default_income_kind(row, supplements):
     return "pending"
 
 
-def budget_report(repo, month, rows):
+def budget_report(repo, month, rows, loans):
     base = repo.allowance(month)
     base = 200000 if base is None else base
     supplements = repo.supplements(month)
     manual = sum(s["cents"] for s in supplements)
     extra = 0
     incomes = []
-    spent = lent = returned = unpriced = 0
+    spent = lent = returned = unpriced = medical = loan_loss = 0
     for row in rows:
         if row["payment"]:
-            if row["personal"] is None:
+            if row["category"] == "医疗":
+                medical += row["personal"] or 0
+            elif row["personal"] is None:
                 unpriced += 1
             else:
                 spent += row["personal"]
                 if row["category"] == "借出":
                     lent += row["personal"]
+                    loan_loss += row["daily_cents"] or 0
         status = row["income_status"]
         if not status:
             continue
@@ -63,17 +66,21 @@ def budget_report(repo, month, rows):
         if status == "settled" and kind == "extra":
             extra += row["cents"]
         if status == "settled" and kind == "repayment":
-            returned += row["cents"]
-        incomes.append({k: row[k] for k in ("id", "time", "platform", "merchant", "product", "cents", "supplement_id")} |
+            # 旧账本可能只有“还款”标记，没有本金关联，继续沿用其原到账金额。
+            returned += row["repayment_cents"] if row["repayment_loan"] else row["cents"]
+        incomes.append({k: row[k] for k in ("id", "time", "platform", "merchant", "product", "cents", "supplement_id", "repayment_loan", "repayment_cents")} |
                        {"kind": kind, "choice": row["income_choice"] or "auto", "status": status})
     total = base + manual + extra
     lending = repo.budget_lending()
     cash_left = total + returned - spent
-    spending_left = total - spent + lent
+    spending_left = total - spent + lent - loan_loss
     remaining = None
     if lending == 1 or cash_left == spending_left:
         remaining = cash_left
     elif lending == 0:
         remaining = spending_left
-    return dict(month=month, base=base, manual=manual, extra=extra, total=total, spent=spent, lent=lent, returned=returned, lending=lending,
+    visible_loans = [loan for loan in loans.values() if loan["time"][:7] <= month and
+                     (not loan["closed"] or loan["time"][:7] == month or
+                      any(r["time"][:7] == month for r in loan["repayments"]))]
+    return dict(medical=medical, loan_loss=loan_loss, loans=visible_loans, month=month, base=base, manual=manual, extra=extra, total=total, spent=spent, lent=lent, returned=returned, lending=lending,
                 remaining=remaining, cash_left=cash_left, spending_left=spending_left, unpriced=unpriced, incomes=incomes, supplements=supplements)

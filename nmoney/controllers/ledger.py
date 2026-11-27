@@ -67,5 +67,11 @@ class LedgerController:
 
     def classify_income(self, request):
         data = request.json()
-        self.service.classify_income(data["id"], data["kind"], data.get("supplement_id"))
+        self.service.classify_income(data["id"], data["kind"], data.get("supplement_id"), data.get("loan_id"))
+        return Response.json({"ok": True})
+
+
+    def settle_loan(self, request):
+        data = request.json()
+        self.service.settle_loan(data["loan_id"], data["closed"])
         return Response.json({"ok": True})
